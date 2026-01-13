@@ -7,6 +7,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AlertCircle, CheckCircle2, Clock, Zap, ChevronDown, ChevronUp } from "lucide-react";
 import JSZip from "jszip";
 import { toast } from "sonner";
+import { trpc } from "@/lib/trpc";
 
 type TestType = "performance" | "responsive" | "ux" | "tc";
 
@@ -225,9 +226,6 @@ export default function Home() {
   const [uxReviews, setUxReviews] = React.useState<UXReview[]>([]);
   const [testCases, setTestCases] = React.useState<TestCase[]>([]);
   const [testSummary, setTestSummary] = React.useState<any>(null);
-
-  const GITHUB_TOKEN = import.meta.env.VITE_GITHUB_TOKEN;
-  const GITHUB_REPO = "eun4791-ctrl/ai_web_test";
 
   // URL 검증
   const validateUrl = (inputUrl: string): boolean => {
@@ -709,15 +707,25 @@ export default function Home() {
     setPollCount(0);
 
     try {
-      await triggerWorkflow(normalizedUrl, selectedTests.join(","));
+      // tRPC를 통해 백엔드 API 호출
+      const triggerMutation = trpc.qa.triggerWorkflow.useMutation();
+      await triggerMutation.mutateAsync({
+        targetUrl: normalizedUrl,
+        tests: selectedTests.join(","),
+      });
 
       setTimeout(async () => {
-        const id = await getLatestRunId();
-        if (id) {
-          setRunId(id);
-        } else {
+        try {
+          const latestRunResult = await trpc.qa.getLatestRun.fetch();
+          if (latestRunResult.id) {
+            setRunId(latestRunResult.id);
+          } else {
+            setIsLoading(false);
+            alert("워크플로우 실행에 실패했습니다");
+          }
+        } catch (error) {
           setIsLoading(false);
-          alert("워크플로우 실행에 실패했습니다");
+          alert("워크플로우 상태 조회 실패: " + (error as Error).message);
         }
       }, 2000);
     } catch (error) {
