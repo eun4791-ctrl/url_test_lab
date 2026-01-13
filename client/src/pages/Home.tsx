@@ -260,6 +260,11 @@ export default function Home() {
         return null;
       }
 
+      // 스크린샷은 이미지 파일이므로 직접 반환
+      if (artifactName === "responsive-screenshots") {
+        return downloadResult.data;
+      }
+
       const parseResult = await parseArtifactJsonMutation.mutateAsync({
         base64Data: downloadResult.data,
         fileName,
