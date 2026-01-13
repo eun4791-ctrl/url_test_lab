@@ -6,6 +6,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AlertCircle, CheckCircle2, Clock, Zap } from "lucide-react";
 import JSZip from "jszip";
+import { toast } from "sonner";
 
 type TestType = "performance" | "responsive" | "ux" | "tc";
 
@@ -446,6 +447,12 @@ export default function Home() {
             }
           })
         );
+        
+        // 토스트 팝업 표시
+        toast.success("실행 완료되었습니다.", {
+          description: "테스트 결과를 아래에서 확인하세요.",
+          duration: 3000,
+        });
       }
     }, 3000); // 3초마다 폴링
 
@@ -642,7 +649,7 @@ export default function Home() {
                           <Clock className="w-5 h-5 animate-spin text-blue-600 mr-2" />
                           <span>스크린샷 캡처 중...</span>
                         </div>
-                      ) : screenshotBase64.desktop || screenshotBase64.tablet || screenshotBase64.mobile ? (
+                      ) : screenshotBase64.desktop && screenshotBase64.tablet && screenshotBase64.mobile ? (
                         <Tabs defaultValue="desktop" className="w-full">
                           <TabsList className="grid w-full grid-cols-3">
                             <TabsTrigger value="desktop">💻 데스크톱 (1920x1080)</TabsTrigger>
