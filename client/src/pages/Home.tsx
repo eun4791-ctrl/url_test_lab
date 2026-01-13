@@ -16,6 +16,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import React from "react";
 
 /**
  * Design Philosophy: Modern Minimalism with Purposeful Clarity
@@ -36,6 +37,13 @@ type TestType = "performance" | "responsive" | "ux" | "tc";
 type ExecutionStatus = "idle" | "running" | "completed" | "failed";
 type TestStatus = "pending" | "running" | "completed" | "failed";
 
+interface LighthouseScore {
+  performance: number;
+  accessibility: number;
+  "best-practices": number;
+  seo: number;
+}
+
 interface TestResult {
   type: TestType;
   status: TestStatus;
@@ -44,6 +52,7 @@ interface TestResult {
   summary?: string;
   details?: string;
   link?: string;
+  lighthouseScores?: LighthouseScore;
 }
 
 const TEST_OPTIONS: Array<{ id: TestType; label: string; description: string }> = [
@@ -74,6 +83,61 @@ const GITHUB_REPO_NAME = "ai_web_test";
 const GITHUB_WORKFLOW_ID = "qa-tests.yml";
 const GITHUB_TOKEN = import.meta.env.VITE_GITHUB_TOKEN || "";
 
+// Lighthouse 점수 색상 결정
+const getScoreColor = (score: number): string => {
+  if (score >= 90) return "text-green-600";
+  if (score >= 50) return "text-amber-600";
+  return "text-red-600";
+};
+
+const getScoreBgColor = (score: number): string => {
+  if (score >= 90) return "bg-green-100";
+  if (score >= 50) return "bg-amber-100";
+  return "bg-red-100";
+};
+
+// Lighthouse 점수 원형 차트
+const ScoreCircle = ({ score, label }: { score: number; label: string }) => {
+  const radius = 45;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference - (score / 100) * circumference;
+
+  return (
+    <div className="flex flex-col items-center">
+      <div className="relative w-24 h-24">
+        <svg width="100" height="100" className="transform -rotate-90">
+          <circle
+            cx="50"
+            cy="50"
+            r={radius}
+            fill="none"
+            stroke="#e5e7eb"
+            strokeWidth="4"
+          />
+          <circle
+            cx="50"
+            cy="50"
+            r={radius}
+            fill="none"
+            stroke={score >= 90 ? "#10b981" : score >= 50 ? "#f59e0b" : "#ef4444"}
+            strokeWidth="4"
+            strokeDasharray={circumference}
+            strokeDashoffset={offset}
+            strokeLinecap="round"
+            className="transition-all duration-500"
+          />
+        </svg>
+        <div className="absolute inset-0 flex items-center justify-center">
+          <span className={`text-2xl font-bold ${getScoreColor(score)}`}>
+            {score}
+          </span>
+        </div>
+      </div>
+      <p className="mt-2 text-sm font-medium text-gray-700">{label}</p>
+    </div>
+  );
+};
+
 export default function Home() {
   const [url, setUrl] = React.useState("");
   const [selectedTests, setSelectedTests] = React.useState<TestType[]>([]);
@@ -101,6 +165,73 @@ export default function Home() {
       return url.protocol === "http:" || url.protocol === "https:";
     } catch {
       return false;
+    }
+  };
+
+  // GitHub Actions artifacts에서 Lighthouse 결과 다운로드
+  const fetchLighthouseResults = async (runId: string) => {
+    try {
+      // artifacts 목록 조회
+      const artifactsResponse = await fetch(
+        `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/actions/runs/${runId}/artifacts`,
+        {
+          headers: {
+            Authorization: `token ${GITHUB_TOKEN}`,
+            Accept: "application/vnd.github.v3+json",
+          },
+        }
+      );
+
+      if (!artifactsResponse.ok) {
+        console.error("Failed to fetch artifacts");
+        return null;
+      }
+
+      const artifactsData = await artifactsResponse.json();
+      const lighthouseArtifact = artifactsData.artifacts?.find(
+        (a: any) => a.name === "lighthouse-report"
+      );
+
+      if (!lighthouseArtifact) {
+        console.log("Lighthouse artifact not found yet");
+        return null;
+      }
+
+      // artifact 다운로드 URL
+      const downloadUrl = lighthouseArtifact.archive_download_url;
+
+      // ZIP 파일 다운로드 및 JSON 추출
+      const zipResponse = await fetch(downloadUrl, {
+        headers: {
+          Authorization: `token ${GITHUB_TOKEN}`,
+        },
+      });
+
+      if (!zipResponse.ok) {
+        console.error("Failed to download artifact");
+        return null;
+      }
+
+      const arrayBuffer = await zipResponse.arrayBuffer();
+      
+      // JSZip 없이 간단한 ZIP 파싱 (lighthouse-report.json 찾기)
+      const view = new Uint8Array(arrayBuffer);
+      let jsonContent = null;
+
+      // ZIP 파일에서 lighthouse-report.json 찾기
+      const decoder = new TextDecoder();
+      const text = decoder.decode(view);
+      
+      // JSON 데이터 추출 (간단한 방식)
+      const jsonMatch = text.match(/\{[\s\S]*"lighthouseVersion"[\s\S]*?\}/);
+      if (jsonMatch) {
+        jsonContent = JSON.parse(jsonMatch[0]);
+      }
+
+      return jsonContent;
+    } catch (error) {
+      console.error("Error fetching Lighthouse results:", error);
+      return null;
     }
   };
 
@@ -136,9 +267,9 @@ export default function Home() {
     try {
       // 프론트엔드에서 직접 GitHub API 호출
       const normalizedUrl = url.startsWith("http") ? url : `https://${url}`;
-      
+
       console.log("Triggering GitHub Actions workflow...");
-      
+
       const triggerResponse = await fetch(
         `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/actions/workflows/${GITHUB_WORKFLOW_ID}/dispatches`,
         {
@@ -167,7 +298,7 @@ export default function Home() {
       console.log("Workflow triggered successfully");
 
       // 최근 실행 ID 조회
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise((resolve) => setTimeout(resolve, 2000));
 
       const runsResponse = await fetch(
         `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/actions/runs?per_page=5`,
@@ -204,7 +335,7 @@ export default function Home() {
 
   // GitHub Actions 상태 폴링
   const pollTestStatus = async (runId: string) => {
-    const maxAttempts = 60; // 5분 (5초 * 60)
+    const maxAttempts = 120; // 10분 (5초 * 120)
     let attempts = 0;
 
     const poll = async () => {
@@ -223,6 +354,20 @@ export default function Home() {
 
         const data = await response.json();
         console.log("Run status:", data.status, "Conclusion:", data.conclusion);
+
+        // Lighthouse 결과 조회
+        let lighthouseScores: LighthouseScore | undefined;
+        if (selectedTests.includes("performance") && data.status === "completed") {
+          const lighthouseData = await fetchLighthouseResults(runId);
+          if (lighthouseData?.scores) {
+            lighthouseScores = {
+              performance: Math.round(lighthouseData.scores.performance * 100) || 0,
+              accessibility: Math.round(lighthouseData.scores.accessibility * 100) || 0,
+              "best-practices": Math.round(lighthouseData.scores["best-practices"] * 100) || 0,
+              seo: Math.round(lighthouseData.scores.seo * 100) || 0,
+            };
+          }
+        }
 
         // 결과 업데이트
         const mockResults: Record<TestType, { status: TestStatus; summary: string; details: string }> = {
@@ -257,6 +402,7 @@ export default function Home() {
             summary: mockResults[testId].summary,
             details: mockResults[testId].details,
             link: `https://github.com/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/actions/runs/${runId}`,
+            lighthouseScores: testId === "performance" ? lighthouseScores : undefined,
           }))
         );
 
@@ -469,26 +615,39 @@ export default function Home() {
                     {result.status === "pending" && <Clock className="w-5 h-5 text-gray-400" />}
                   </div>
                 </CardHeader>
-                {result.details && (
-                  <CardContent className="pt-0">
+                <CardContent className="pt-0">
+                  {/* Lighthouse 점수 표시 */}
+                  {result.type === "performance" && result.lighthouseScores && (
+                    <div className="bg-gradient-to-br from-blue-50 to-indigo-50 p-6 rounded-lg mb-4">
+                      <h3 className="text-lg font-semibold text-gray-900 mb-6">Lighthouse 점수</h3>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+                        <ScoreCircle score={result.lighthouseScores.performance} label="성능" />
+                        <ScoreCircle score={result.lighthouseScores.accessibility} label="접근성" />
+                        <ScoreCircle score={result.lighthouseScores["best-practices"]} label="권장사항" />
+                        <ScoreCircle score={result.lighthouseScores.seo} label="검색엔진최적화" />
+                      </div>
+                    </div>
+                  )}
+
+                  {result.details && (
                     <div className="bg-gray-50 p-4 rounded-lg">
                       <pre className="text-sm text-gray-700 whitespace-pre-wrap font-mono">
                         {result.details}
                       </pre>
                     </div>
-                    {result.link && (
-                      <a
-                        href={result.link}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-2 mt-4 text-blue-500 hover:text-blue-700 font-medium"
-                      >
-                        <ExternalLink className="w-4 h-4" />
-                        상세 결과 보기
-                      </a>
-                    )}
-                  </CardContent>
-                )}
+                  )}
+                  {result.link && (
+                    <a
+                      href={result.link}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-2 mt-4 text-blue-500 hover:text-blue-700 font-medium"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                      상세 결과 보기
+                    </a>
+                  )}
+                </CardContent>
               </Card>
             ))}
           </div>
@@ -497,5 +656,3 @@ export default function Home() {
     </div>
   );
 }
-
-import React from "react";
