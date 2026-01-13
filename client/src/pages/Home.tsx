@@ -227,6 +227,9 @@ export default function Home() {
   const [testCases, setTestCases] = React.useState<TestCase[]>([]);
   const [testSummary, setTestSummary] = React.useState<any>(null);
 
+  // tRPC 뮤테이션 (컴포넌트 최상위에서 호출)
+  const triggerWorkflowMutation = trpc.qa.triggerWorkflow.useMutation();
+
   // URL 검증
   const validateUrl = (inputUrl: string): boolean => {
     try {
@@ -708,8 +711,7 @@ export default function Home() {
 
     try {
       // tRPC를 통해 백엔드 API 호출
-      const triggerMutation = trpc.qa.triggerWorkflow.useMutation();
-      await triggerMutation.mutateAsync({
+      await triggerWorkflowMutation.mutateAsync({
         targetUrl: normalizedUrl,
         tests: selectedTests.join(","),
       });
