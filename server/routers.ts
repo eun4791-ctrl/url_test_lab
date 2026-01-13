@@ -3,6 +3,7 @@ import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
 import { z } from "zod";
+import { ENV } from "./_core/env";
 
 export const appRouter = router({
   system: systemRouter,
@@ -24,10 +25,9 @@ export const appRouter = router({
         tests: z.string(),
       }))
       .mutation(async ({ input }) => {
-        const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
         const GITHUB_REPO = "eun4791-ctrl/ai_web_test";
 
-        if (!GITHUB_TOKEN) {
+        if (!ENV.githubToken) {
           throw new Error("GitHub token not configured");
         }
 
@@ -37,7 +37,7 @@ export const appRouter = router({
             {
               method: "POST",
               headers: {
-                Authorization: `token ${GITHUB_TOKEN}`,
+                Authorization: `token ${ENV.githubToken}`,
                 "Content-Type": "application/json",
                 Accept: "application/vnd.github.v3+json",
               },
@@ -65,10 +65,10 @@ export const appRouter = router({
       }),
 
     getLatestRun: publicProcedure.query(async () => {
-      const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+      // Use ENV.githubToken instead
       const GITHUB_REPO = "eun4791-ctrl/ai_web_test";
 
-      if (!GITHUB_TOKEN) {
+      if (!ENV.githubToken) {
         throw new Error("GitHub token not configured");
       }
 
@@ -77,7 +77,7 @@ export const appRouter = router({
           `https://api.github.com/repos/${GITHUB_REPO}/actions/runs?per_page=1`,
           {
             headers: {
-              Authorization: `token ${GITHUB_TOKEN}`,
+              Authorization: `token ${ENV.githubToken}`,
               Accept: "application/vnd.github.v3+json",
             },
           }
@@ -97,10 +97,10 @@ export const appRouter = router({
     checkRunStatus: publicProcedure
       .input(z.object({ runId: z.number() }))
       .query(async ({ input }) => {
-        const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+        // Use ENV.githubToken instead
         const GITHUB_REPO = "eun4791-ctrl/ai_web_test";
 
-        if (!GITHUB_TOKEN) {
+        if (!ENV.githubToken) {
           throw new Error("GitHub token not configured");
         }
 
@@ -109,7 +109,7 @@ export const appRouter = router({
             `https://api.github.com/repos/${GITHUB_REPO}/actions/runs/${input.runId}`,
             {
               headers: {
-                Authorization: `token ${GITHUB_TOKEN}`,
+                Authorization: `token ${ENV.githubToken}`,
                 Accept: "application/vnd.github.v3+json",
               },
             }
@@ -128,10 +128,10 @@ export const appRouter = router({
     getArtifacts: publicProcedure
       .input(z.object({ runId: z.number() }))
       .query(async ({ input }) => {
-        const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+        // Use ENV.githubToken instead
         const GITHUB_REPO = "eun4791-ctrl/ai_web_test";
 
-        if (!GITHUB_TOKEN) {
+        if (!ENV.githubToken) {
           throw new Error("GitHub token not configured");
         }
 
@@ -140,7 +140,7 @@ export const appRouter = router({
             `https://api.github.com/repos/${GITHUB_REPO}/actions/runs/${input.runId}/artifacts`,
             {
               headers: {
-                Authorization: `token ${GITHUB_TOKEN}`,
+                Authorization: `token ${ENV.githubToken}`,
                 Accept: "application/vnd.github.v3+json",
               },
             }
@@ -162,10 +162,10 @@ export const appRouter = router({
         artifactName: z.string(),
       }))
       .query(async ({ input }) => {
-        const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+        // Use ENV.githubToken instead
         const GITHUB_REPO = "eun4791-ctrl/ai_web_test";
 
-        if (!GITHUB_TOKEN) {
+        if (!ENV.githubToken) {
           throw new Error("GitHub token not configured");
         }
 
@@ -175,7 +175,7 @@ export const appRouter = router({
             `https://api.github.com/repos/${GITHUB_REPO}/actions/runs/${input.runId}/artifacts`,
             {
               headers: {
-                Authorization: `token ${GITHUB_TOKEN}`,
+                Authorization: `token ${ENV.githubToken}`,
                 Accept: "application/vnd.github.v3+json",
               },
             }
@@ -193,7 +193,7 @@ export const appRouter = router({
           // Artifact 다운로드
           const downloadResponse = await fetch(artifact.archive_download_url, {
             headers: {
-              Authorization: `token ${GITHUB_TOKEN}`,
+              Authorization: `token ${ENV.githubToken}`,
             },
           });
 

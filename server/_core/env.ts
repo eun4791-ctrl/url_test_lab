@@ -1,3 +1,8 @@
+// GitHub 토큰이 없으면 경고
+if (!process.env.GITHUB_TOKEN && process.env.NODE_ENV === "production") {
+  console.warn("[WARNING] GITHUB_TOKEN environment variable is not set");
+}
+
 export const ENV = {
   appId: process.env.VITE_APP_ID ?? "",
   cookieSecret: process.env.JWT_SECRET ?? "",
@@ -7,4 +12,5 @@ export const ENV = {
   isProduction: process.env.NODE_ENV === "production",
   forgeApiUrl: process.env.BUILT_IN_FORGE_API_URL ?? "",
   forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? "",
+  githubToken: process.env.GITHUB_TOKEN ?? "",
 };
