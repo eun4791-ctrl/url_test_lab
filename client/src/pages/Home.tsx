@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { AlertCircle, CheckCircle2, Clock, Zap } from "lucide-react";
+import { AlertCircle, CheckCircle2, Clock, Zap, ChevronDown, ChevronUp } from "lucide-react";
 import JSZip from "jszip";
 import { toast } from "sonner";
 
@@ -30,6 +30,23 @@ interface ResponsiveScreenshots {
   mobile?: string;
 }
 
+interface UXReview {
+  priority: "상" | "중" | "하";
+  issue: string;
+  cause: string;
+  suggestion: string;
+}
+
+interface TestCase {
+  id: string;
+  title: string;
+  precondition: string;
+  testStep: string;
+  expectedResults: string;
+  result: "Pass" | "Fail" | "Blocked" | "N/A";
+  details?: string;
+}
+
 const getScoreColor = (score: number) => {
   if (score >= 90) return "text-green-600";
   if (score >= 50) return "text-amber-600";
@@ -42,9 +59,21 @@ const getScoreBgColor = (score: number) => {
   return "bg-red-100";
 };
 
+const getPriorityColor = (priority: string) => {
+  if (priority === "상") return "bg-red-100 text-red-800";
+  if (priority === "중") return "bg-amber-100 text-amber-800";
+  return "bg-blue-100 text-blue-800";
+};
+
+const getResultColor = (result: string) => {
+  if (result === "Pass") return "bg-green-100 text-green-800";
+  if (result === "Fail") return "bg-red-100 text-red-800";
+  if (result === "Blocked") return "bg-gray-100 text-gray-800";
+  return "bg-blue-100 text-blue-800";
+};
+
 // Lighthouse 점수 원형 차트
 const ScoreCircle = ({ score, label }: { score: number; label: string }) => {
-  // NaN 체크
   const validScore = isNaN(score) ? 0 : Math.min(100, Math.max(0, score));
   
   const radius = 45;
@@ -87,6 +116,103 @@ const ScoreCircle = ({ score, label }: { score: number; label: string }) => {
   );
 };
 
+// TC 결과 테이블
+const TestCaseTable = ({ testCases, summary }: { testCases: TestCase[]; summary: any }) => {
+  const [expandedRows, setExpandedRows] = React.useState<Set<string>>(new Set());
+
+  const toggleRow = (id: string) => {
+    const newExpanded = new Set(expandedRows);
+    if (newExpanded.has(id)) {
+      newExpanded.delete(id);
+    } else {
+      newExpanded.add(id);
+    }
+    setExpandedRows(newExpanded);
+  };
+
+  const successRate = summary.total > 0 
+    ? Math.round((summary.passed / (summary.total - summary.na)) * 100 * 10) / 10 
+    : 0;
+
+  return (
+    <div className="space-y-4">
+      {/* 요약 테이블 */}
+      <div className="bg-gray-50 rounded-lg p-4">
+        <div className="grid grid-cols-4 gap-4 text-center">
+          <div>
+            <p className="text-sm text-gray-600">총 TC 수</p>
+            <p className="text-2xl font-bold text-gray-900">{summary.total}</p>
+          </div>
+          <div>
+            <p className="text-sm text-gray-600">Pass</p>
+            <p className="text-2xl font-bold text-green-600">{summary.passed}</p>
+          </div>
+          <div>
+            <p className="text-sm text-gray-600">Fail</p>
+            <p className="text-2xl font-bold text-red-600">{summary.failed}</p>
+          </div>
+          <div>
+            <p className="text-sm text-gray-600">성공률</p>
+            <p className="text-2xl font-bold text-blue-600">{successRate}%</p>
+          </div>
+        </div>
+      </div>
+
+      {/* 상세 테이블 */}
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm border-collapse">
+          <thead>
+            <tr className="bg-gray-100 border-b">
+              <th className="text-left p-3 font-semibold text-gray-700">ID</th>
+              <th className="text-left p-3 font-semibold text-gray-700">Title</th>
+              <th className="text-left p-3 font-semibold text-gray-700">Precondition</th>
+              <th className="text-left p-3 font-semibold text-gray-700">Test Step</th>
+              <th className="text-left p-3 font-semibold text-gray-700">Expected Results</th>
+              <th className="text-left p-3 font-semibold text-gray-700">Result</th>
+            </tr>
+          </thead>
+          <tbody>
+            {testCases.map((tc) => (
+              <React.Fragment key={tc.id}>
+                <tr className="border-b hover:bg-gray-50">
+                  <td className="p-3 text-gray-900 font-medium">{tc.id}</td>
+                  <td className="p-3 text-gray-900">{tc.title}</td>
+                  <td className="p-3 text-gray-600 text-xs">{tc.precondition}</td>
+                  <td className="p-3 text-gray-600 text-xs">{tc.testStep}</td>
+                  <td className="p-3 text-gray-600 text-xs">{tc.expectedResults}</td>
+                  <td className="p-3">
+                    <span className={`px-3 py-1 rounded-full text-xs font-semibold ${getResultColor(tc.result)}`}>
+                      {tc.result}
+                    </span>
+                  </td>
+                </tr>
+                {tc.details && (
+                  <tr className="border-b bg-gray-50">
+                    <td colSpan={6} className="p-3">
+                      <button
+                        onClick={() => toggleRow(tc.id)}
+                        className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800"
+                      >
+                        {expandedRows.has(tc.id) ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                        {expandedRows.has(tc.id) ? "로그 숨기기" : "로그 보기"}
+                      </button>
+                      {expandedRows.has(tc.id) && (
+                        <div className="mt-2 p-3 bg-gray-800 text-gray-100 rounded font-mono text-xs overflow-x-auto">
+                          {tc.details}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                )}
+              </React.Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
 export default function Home() {
   const [url, setUrl] = React.useState("");
   const [selectedTests, setSelectedTests] = React.useState<TestType[]>([]);
@@ -96,6 +222,9 @@ export default function Home() {
   const [pollCount, setPollCount] = React.useState(0);
   const [screenshots, setScreenshots] = React.useState<ResponsiveScreenshots>({});
   const [screenshotBase64, setScreenshotBase64] = React.useState<ResponsiveScreenshots>({});
+  const [uxReviews, setUxReviews] = React.useState<UXReview[]>([]);
+  const [testCases, setTestCases] = React.useState<TestCase[]>([]);
+  const [testSummary, setTestSummary] = React.useState<any>(null);
 
   const GITHUB_TOKEN = import.meta.env.VITE_GITHUB_TOKEN;
   const GITHUB_REPO = "eun4791-ctrl/ai_web_test";
@@ -149,7 +278,7 @@ export default function Home() {
       }
 
       console.log("Workflow triggered successfully");
-      return 1; // 즉시 반환
+      return 1;
     } catch (error) {
       console.error("Trigger error:", error);
       throw error;
@@ -245,7 +374,7 @@ export default function Home() {
       console.log("Downloading Lighthouse artifact...");
       const zipResponse = await fetch(lighthouseArtifact.archive_download_url, {
         headers: {
-          Authorization: `Bearer ${GITHUB_TOKEN}`,
+          Authorization: `token ${GITHUB_TOKEN}`,
         },
       });
 
@@ -254,11 +383,9 @@ export default function Home() {
       const arrayBuffer = await zipResponse.arrayBuffer();
       console.log("Downloaded ZIP file, size:", arrayBuffer.byteLength);
 
-      // JSZip으로 ZIP 파일 파싱
       const zip = new JSZip();
       await zip.loadAsync(arrayBuffer);
 
-      // lighthouse-report.json 찾기
       let jsonContent: any = null;
 
       for (const [filename, file] of Object.entries(zip.files)) {
@@ -276,9 +403,6 @@ export default function Home() {
         return null;
       }
 
-      console.log("Full Lighthouse JSON structure:", JSON.stringify(jsonContent, null, 2).substring(0, 500));
-
-      // Lighthouse 점수 추출
       let lighthouseScores: LighthouseScore = {
         performance: 0,
         accessibility: 0,
@@ -286,16 +410,13 @@ export default function Home() {
         seo: 0,
       };
 
-      // v11 형식: categories 객체 내에 각 카테고리의 score 필드
       if (jsonContent.categories) {
         const categories = jsonContent.categories;
         lighthouseScores.performance = Math.round((categories.performance?.score || 0) * 100);
         lighthouseScores.accessibility = Math.round((categories.accessibility?.score || 0) * 100);
         lighthouseScores["best-practices"] = Math.round((categories["best-practices"]?.score || 0) * 100);
         lighthouseScores.seo = Math.round((categories.seo?.score || 0) * 100);
-      }
-      // v10 이하 형식: scores 객체 직접 사용
-      else if (jsonContent.scores) {
+      } else if (jsonContent.scores) {
         const scores = jsonContent.scores;
         lighthouseScores.performance = Math.round((scores.performance || 0) * 100);
         lighthouseScores.accessibility = Math.round((scores.accessibility || 0) * 100);
@@ -303,7 +424,6 @@ export default function Home() {
         lighthouseScores.seo = Math.round((scores.seo || 0) * 100);
       }
 
-      // 유효성 검증
       if (isNaN(lighthouseScores.performance)) lighthouseScores.performance = 0;
       if (isNaN(lighthouseScores.accessibility)) lighthouseScores.accessibility = 0;
       if (isNaN(lighthouseScores["best-practices"])) lighthouseScores["best-practices"] = 0;
@@ -342,59 +462,148 @@ export default function Home() {
       const arrayBuffer = await zipResponse.arrayBuffer();
       console.log("Downloaded screenshot ZIP, size:", arrayBuffer.byteLength);
 
-      // JSZip으로 ZIP 파일 파싱
       const zip = new JSZip();
       await zip.loadAsync(arrayBuffer);
 
-      const screenshots: ResponsiveScreenshots = {};
       const base64Screenshots: ResponsiveScreenshots = {};
 
-      // 각 스크린샷 파일 추출
       for (const [filename, file] of Object.entries(zip.files)) {
         console.log("Screenshot file:", filename);
         if (filename.includes("desktop.png")) {
-              const blob = await (file as any).async("blob");
-              const url = URL.createObjectURL(blob);
-              screenshots.desktop = url;
-              const arrayBuf = await (file as any).async("arraybuffer");
-              const uint8Array = new Uint8Array(arrayBuf);
-              let binaryString = "";
-              for (let i = 0; i < uint8Array.length; i++) {
-                binaryString += String.fromCharCode(uint8Array[i]);
-              }
-              base64Screenshots.desktop = "data:image/png;base64," + btoa(binaryString);
+          const arrayBuf = await (file as any).async("arraybuffer");
+          const uint8Array = new Uint8Array(arrayBuf);
+          let binaryString = "";
+          for (let i = 0; i < uint8Array.length; i++) {
+            binaryString += String.fromCharCode(uint8Array[i]);
+          }
+          base64Screenshots.desktop = "data:image/png;base64," + btoa(binaryString);
         } else if (filename.includes("tablet.png")) {
-              const blob = await (file as any).async("blob");
-              const url = URL.createObjectURL(blob);
-              screenshots.tablet = url;
-              const arrayBuf = await (file as any).async("arraybuffer");
-              const uint8Array2 = new Uint8Array(arrayBuf);
-              let binaryString2 = "";
-              for (let i = 0; i < uint8Array2.length; i++) {
-                binaryString2 += String.fromCharCode(uint8Array2[i]);
-              }
-              base64Screenshots.tablet = "data:image/png;base64," + btoa(binaryString2);
+          const arrayBuf = await (file as any).async("arraybuffer");
+          const uint8Array = new Uint8Array(arrayBuf);
+          let binaryString = "";
+          for (let i = 0; i < uint8Array.length; i++) {
+            binaryString += String.fromCharCode(uint8Array[i]);
+          }
+          base64Screenshots.tablet = "data:image/png;base64," + btoa(binaryString);
         } else if (filename.includes("mobile.png")) {
-              const blob = await (file as any).async("blob");
-              const url = URL.createObjectURL(blob);
-              screenshots.mobile = url;
-              const arrayBuf = await (file as any).async("arraybuffer");
-              const uint8Array3 = new Uint8Array(arrayBuf);
-              let binaryString3 = "";
-              for (let i = 0; i < uint8Array3.length; i++) {
-                binaryString3 += String.fromCharCode(uint8Array3[i]);
-              }
-              base64Screenshots.mobile = "data:image/png;base64," + btoa(binaryString3);
+          const arrayBuf = await (file as any).async("arraybuffer");
+          const uint8Array = new Uint8Array(arrayBuf);
+          let binaryString = "";
+          for (let i = 0; i < uint8Array.length; i++) {
+            binaryString += String.fromCharCode(uint8Array[i]);
+          }
+          base64Screenshots.mobile = "data:image/png;base64," + btoa(binaryString);
         }
       }
 
-      console.log("Extracted screenshots:", Object.keys(screenshots));
-      setScreenshots(screenshots);
+      console.log("Extracted screenshots:", Object.keys(base64Screenshots));
       setScreenshotBase64(base64Screenshots);
-      return screenshots;
+      return base64Screenshots;
     } catch (error) {
       console.error("Error fetching screenshots:", error);
       return {};
+    }
+  };
+
+  // AI UX 리뷰 조회
+  const fetchUXReview = async (id: number): Promise<UXReview[]> => {
+    try {
+      console.log("Fetching UX review for run:", id);
+
+      const artifacts = await getArtifacts(id);
+      const uxArtifact = artifacts.find((a: any) => a.name === "ux-review");
+
+      if (!uxArtifact) {
+        console.warn("UX review artifact not found");
+        return [];
+      }
+
+      console.log("Downloading UX review artifact...");
+      const zipResponse = await fetch(uxArtifact.archive_download_url, {
+        headers: {
+          Authorization: `token ${GITHUB_TOKEN}`,
+        },
+      });
+
+      if (!zipResponse.ok) throw new Error("Failed to download UX review artifact");
+
+      const arrayBuffer = await zipResponse.arrayBuffer();
+      const zip = new JSZip();
+      await zip.loadAsync(arrayBuffer);
+
+      let jsonContent: any = null;
+      for (const [filename, file] of Object.entries(zip.files)) {
+        if (filename.includes("ux-review.json")) {
+          const content = await (file as any).async("text");
+          jsonContent = JSON.parse(content);
+          break;
+        }
+      }
+
+      if (!jsonContent) {
+        console.error("ux-review.json not found");
+        return [];
+      }
+
+      const reviews = jsonContent.reviews || [];
+      console.log("Extracted UX reviews:", reviews.length);
+      setUxReviews(reviews);
+      return reviews;
+    } catch (error) {
+      console.error("Error fetching UX review:", error);
+      return [];
+    }
+  };
+
+  // TC 결과 조회
+  const fetchTestCases = async (id: number): Promise<{ testCases: TestCase[]; summary: any }> => {
+    try {
+      console.log("Fetching test cases for run:", id);
+
+      const artifacts = await getArtifacts(id);
+      const tcArtifact = artifacts.find((a: any) => a.name === "test-cases-report");
+
+      if (!tcArtifact) {
+        console.warn("Test cases artifact not found");
+        return { testCases: [], summary: null };
+      }
+
+      console.log("Downloading test cases artifact...");
+      const zipResponse = await fetch(tcArtifact.archive_download_url, {
+        headers: {
+          Authorization: `token ${GITHUB_TOKEN}`,
+        },
+      });
+
+      if (!zipResponse.ok) throw new Error("Failed to download test cases artifact");
+
+      const arrayBuffer = await zipResponse.arrayBuffer();
+      const zip = new JSZip();
+      await zip.loadAsync(arrayBuffer);
+
+      let jsonContent: any = null;
+      for (const [filename, file] of Object.entries(zip.files)) {
+        if (filename.includes("tc-report.json")) {
+          const content = await (file as any).async("text");
+          jsonContent = JSON.parse(content);
+          break;
+        }
+      }
+
+      if (!jsonContent) {
+        console.error("tc-report.json not found");
+        return { testCases: [], summary: null };
+      }
+
+      const testCasesList = jsonContent.testCases || [];
+      const summary = jsonContent.summary || {};
+      console.log("Extracted test cases:", testCasesList.length);
+      setTestCases(testCasesList);
+      setTestSummary(summary);
+      return { testCases: testCasesList, summary };
+    } catch (error) {
+      console.error("Error fetching test cases:", error);
+      return { testCases: [], summary: null };
     }
   };
 
@@ -411,7 +620,6 @@ export default function Home() {
         clearInterval(pollInterval);
         setIsLoading(false);
 
-        // 결과 조회
         let lighthouseScores: LighthouseScore | undefined;
         if (selectedTests.includes("performance")) {
           const scores = await fetchLighthouseResults(runId);
@@ -423,7 +631,16 @@ export default function Home() {
           responsiveScreenshots = await fetchScreenshots(runId);
         }
 
-        // 결과 업데이트
+        let uxReviewList: UXReview[] = [];
+        if (selectedTests.includes("ux")) {
+          uxReviewList = await fetchUXReview(runId);
+        }
+
+        let tcData: { testCases: TestCase[]; summary: any } = { testCases: [], summary: null };
+        if (selectedTests.includes("tc")) {
+          tcData = await fetchTestCases(runId);
+        }
+
         setResults(
           selectedTests.map((testId) => {
             if (testId === "performance") {
@@ -438,6 +655,18 @@ export default function Home() {
                 status: "completed",
                 data: responsiveScreenshots,
               };
+            } else if (testId === "ux") {
+              return {
+                testId,
+                status: "completed",
+                data: uxReviewList,
+              };
+            } else if (testId === "tc") {
+              return {
+                testId,
+                status: "completed",
+                data: tcData,
+              };
             } else {
               return {
                 testId,
@@ -448,19 +677,17 @@ export default function Home() {
           })
         );
         
-        // 토스트 팝업 표시
         toast.success("실행 완료되었습니다.", {
           description: "테스트 결과를 아래에서 확인하세요.",
           duration: 3000,
         });
       }
-    }, 3000); // 3초마다 폴링
+    }, 3000);
 
     return () => clearInterval(pollInterval);
   }, [isLoading, runId, selectedTests]);
 
   const handleRunTests = async () => {
-    // 검증
     if (!url.trim()) {
       alert("URL을 입력해주세요");
       return;
@@ -482,10 +709,8 @@ export default function Home() {
     setPollCount(0);
 
     try {
-      // Workflow 트리거
       await triggerWorkflow(normalizedUrl, selectedTests.join(","));
 
-      // 최신 run ID 조회 (2초 대기 후)
       setTimeout(async () => {
         const id = await getLatestRunId();
         if (id) {
@@ -504,7 +729,6 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-50 py-12 px-4">
       <div className="max-w-6xl mx-auto">
-        {/* 헤더 */}
         <div className="mb-8">
           <h1 className="text-4xl font-bold text-gray-900 mb-2">QA 자동화 대시보드</h1>
           <p className="text-gray-600">
@@ -513,7 +737,6 @@ export default function Home() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* 입력 영역 */}
           <Card className="lg:col-span-1">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -523,7 +746,6 @@ export default function Home() {
               <CardDescription>테스트할 URL과 항목을 선택하세요</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {/* URL 입력 */}
               <div>
                 <label className="text-sm font-medium text-gray-700 mb-2 block">🔗 테스트할 URL</label>
                 <Input
@@ -536,7 +758,6 @@ export default function Home() {
                 <p className="text-xs text-gray-500 mt-1">https:// 프로토콜 자동 추가됩니다</p>
               </div>
 
-              {/* 테스트 선택 */}
               <div>
                 <label className="text-sm font-medium text-gray-700 mb-3 block">🧪 실행할 테스트</label>
                 <div className="space-y-2">
@@ -567,7 +788,6 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* 실행 버튼 */}
               <Button
                 onClick={handleRunTests}
                 disabled={isLoading || selectedTests.length === 0}
@@ -586,11 +806,9 @@ export default function Home() {
             </CardContent>
           </Card>
 
-          {/* 결과 영역 */}
           <div className="lg:col-span-2 space-y-4">
             {results.length > 0 && (
               <>
-                {/* Lighthouse 성능 */}
                 {results.find((r) => r.testId === "performance") && (
                   <Card>
                     <CardHeader>
@@ -634,7 +852,6 @@ export default function Home() {
                   </Card>
                 )}
 
-                {/* Responsive Viewer */}
                 {results.find((r) => r.testId === "responsive") && (
                   <Card>
                     <CardHeader>
@@ -700,7 +917,6 @@ export default function Home() {
                   </Card>
                 )}
 
-                {/* UX 리뷰 */}
                 {results.find((r) => r.testId === "ux") && (
                   <Card>
                     <CardHeader>
@@ -710,12 +926,47 @@ export default function Home() {
                       </CardTitle>
                     </CardHeader>
                     <CardContent>
-                      <p className="text-gray-600">UX 리뷰 결과가 준비 중입니다</p>
+                      {results.find((r) => r.testId === "ux")?.status === "running" ? (
+                        <div className="flex items-center justify-center py-8">
+                          <Clock className="w-5 h-5 animate-spin text-blue-600 mr-2" />
+                          <span>UX 리뷰 분석 중...</span>
+                        </div>
+                      ) : uxReviews && uxReviews.length > 0 ? (
+                        <div className="space-y-3">
+                          {uxReviews.map((review, idx) => (
+                            <div key={idx} className="border rounded-lg p-4 bg-gray-50">
+                              <div className="flex items-start gap-3 mb-2">
+                                <span className={`px-3 py-1 rounded-full text-xs font-semibold ${getPriorityColor(review.priority)}`}>
+                                  {review.priority}
+                                </span>
+                              </div>
+                              <div className="space-y-2">
+                                <div>
+                                  <p className="text-sm font-semibold text-gray-900">[문제점]</p>
+                                  <p className="text-sm text-gray-700">{review.issue}</p>
+                                </div>
+                                <div>
+                                  <p className="text-sm font-semibold text-gray-900">[문제 원인]</p>
+                                  <p className="text-sm text-gray-700">{review.cause}</p>
+                                </div>
+                                <div>
+                                  <p className="text-sm font-semibold text-gray-900">[개선 제안]</p>
+                                  <p className="text-sm text-gray-700">{review.suggestion}</p>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-center py-8 text-gray-500">
+                          <AlertCircle className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                          UX 리뷰 결과를 불러올 수 없습니다
+                        </div>
+                      )}
                     </CardContent>
                   </Card>
                 )}
 
-                {/* TC 작성 및 수행 */}
                 {results.find((r) => r.testId === "tc") && (
                   <Card>
                     <CardHeader>
@@ -725,7 +976,19 @@ export default function Home() {
                       </CardTitle>
                     </CardHeader>
                     <CardContent>
-                      <p className="text-gray-600">테스트 케이스 결과가 준비 중입니다</p>
+                      {results.find((r) => r.testId === "tc")?.status === "running" ? (
+                        <div className="flex items-center justify-center py-8">
+                          <Clock className="w-5 h-5 animate-spin text-blue-600 mr-2" />
+                          <span>테스트 케이스 실행 중...</span>
+                        </div>
+                      ) : testCases.length > 0 && testSummary ? (
+                        <TestCaseTable testCases={testCases} summary={testSummary} />
+                      ) : (
+                        <div className="text-center py-8 text-gray-500">
+                          <AlertCircle className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                          테스트 케이스 결과를 불러올 수 없습니다
+                        </div>
+                      )}
                     </CardContent>
                   </Card>
                 )}
