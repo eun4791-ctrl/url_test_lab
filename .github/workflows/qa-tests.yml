@@ -57,7 +57,6 @@ jobs:
         if: contains(github.event.inputs.tests, 'responsive')
         continue-on-error: true
         run: |
-          npm install playwright
           npx playwright install chromium
 
       - name: Generate Screenshots with Playwright
@@ -240,7 +239,6 @@ jobs:
       - name: Generate and Run Test Cases
         if: contains(github.event.inputs.tests, 'tc')
         run: |
-          npm install playwright
           npx playwright install chromium
           
           cat > test-cases.mjs << 'SCRIPT'
