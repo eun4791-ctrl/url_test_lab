@@ -57,6 +57,8 @@ jobs:
         if: contains(github.event.inputs.tests, 'responsive')
         continue-on-error: true
         run: |
+          mkdir -p /tmp/playwright-env
+          cd /tmp/playwright-env
           npm init -y
           npm install playwright
           npx playwright install chromium
@@ -64,6 +66,8 @@ jobs:
       - name: Generate Screenshots with Playwright
         if: contains(github.event.inputs.tests, 'responsive')
         continue-on-error: true
+        env:
+          NODE_PATH: /tmp/playwright-env/node_modules
         run: |
           cat > screenshot.mjs << 'SCRIPT'
           import { chromium } from 'playwright';
@@ -240,10 +244,17 @@ jobs:
       # ========== Playwright Test Cases ==========
       - name: Generate and Run Test Cases
         if: contains(github.event.inputs.tests, 'tc')
+        env:
+          NODE_PATH: /tmp/playwright-env/node_modules
         run: |
-          npm init -y
-          npm install playwright
-          npx playwright install chromium
+          if [ ! -d "/tmp/playwright-env" ]; then
+            mkdir -p /tmp/playwright-env
+            cd /tmp/playwright-env
+            npm init -y
+            npm install playwright
+            npx playwright install chromium
+            cd -
+          fi
           
           cat > test-cases.mjs << 'SCRIPT'
           import { chromium } from 'playwright';
