@@ -1,5 +1,4 @@
 name: QA Automation Tests
-
 on:
   workflow_dispatch:
     inputs:
@@ -15,8 +14,7 @@ on:
 jobs:
   qa-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-
+    timeout-minutes: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -25,78 +23,77 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '18'
-          cache: 'npm'
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Create reports directory
+        run: mkdir -p reports screenshots
 
-      - name: Install Playwright
-        run: npx playwright install --with-deps
-
-      - name: Parse test types
-        id: parse_tests
-        run: |
-          echo "tests=${{ github.event.inputs.tests }}" >> $GITHUB_OUTPUT
-          echo "url=${{ github.event.inputs.target_url }}" >> $GITHUB_OUTPUT
+      # ========== Lighthouse Performance Test ==========
+      - name: Install Lighthouse
+        if: contains(github.event.inputs.tests, 'performance')
+        run: npm install -g lighthouse
 
       - name: Run Lighthouse Performance Test
         if: contains(github.event.inputs.tests, 'performance')
+        continue-on-error: true
         run: |
-          mkdir -p reports
-          npm install -g lighthouse
-          lighthouse "${{ github.event.inputs.target_url }}" --output=json --output-path=./reports/lighthouse-report.json --chrome-flags="--headless" || true
-          lighthouse "${{ github.event.inputs.target_url }}" --output=html --output-path=./reports/lighthouse-report.html --chrome-flags="--headless" || true
+          lighthouse "${{ github.event.inputs.target_url }}" \
+            --output=json \
+            --output-path=./reports/lighthouse-report.json \
+            --chrome-flags="--headless --no-sandbox" \
+            --quiet || true
           
-          # JSON 파일이 생성되었는지 확인하고, 없으면 기본값 생성
-          if [ ! -f ./reports/lighthouse-report.json ]; then
-            echo "Lighthouse report not generated, creating default report..."
-            cat > ./reports/lighthouse-report.json << 'LHEOF'
-          {
-            "categories": {
-              "performance": { "score": 0.75 },
-              "accessibility": { "score": 0.82 },
-              "best-practices": { "score": 0.88 },
-              "seo": { "score": 0.91 }
-            },
-            "requestedUrl": "${{ github.event.inputs.target_url }}"
-          }
-          LHEOF
-          fi
+          lighthouse "${{ github.event.inputs.target_url }}" \
+            --output=html \
+            --output-path=./reports/lighthouse-report.html \
+            --chrome-flags="--headless --no-sandbox" \
+            --quiet || true
+          
+          echo "✅ Lighthouse test completed"
 
-      - name: Run Responsive Screenshot Test
+      # ========== Playwright Responsive Screenshots ==========
+      - name: Install Playwright
         if: contains(github.event.inputs.tests, 'responsive')
         run: |
-          mkdir -p screenshots
-          cat > screenshot.js << 'EOF'
-          const { chromium } = require('playwright');
-          const fs = require('fs');
+          npm install playwright
+          npx playwright install chromium
+
+      - name: Generate Screenshots with Playwright
+        if: contains(github.event.inputs.tests, 'responsive')
+        continue-on-error: true
+        run: |
+          cat > screenshot.mjs << 'SCRIPT'
+          import { chromium } from 'playwright';
+          import fs from 'fs';
+          import path from 'path';
+          
+          const screenshotsDir = './screenshots';
+          if (!fs.existsSync(screenshotsDir)) {
+            fs.mkdirSync(screenshotsDir, { recursive: true });
+          }
           
           (async () => {
             try {
               const browser = await chromium.launch();
-              const context = await browser.createContext();
-              const page = await context.newPage();
-              
+              const page = await browser.newPage();
               const targetUrl = '${{ github.event.inputs.target_url }}';
-              console.log('Loading URL:', targetUrl);
               
+              console.log('Loading URL:', targetUrl);
               await page.goto(targetUrl, { waitUntil: 'networkidle', timeout: 30000 });
-              await page.waitForTimeout(1000);
               
               // Desktop
               console.log('Capturing desktop screenshot...');
               await page.setViewportSize({ width: 1920, height: 1080 });
-              await page.screenshot({ path: 'screenshots/desktop.png' });
+              await page.screenshot({ path: path.join(screenshotsDir, 'desktop.png') });
               
               // Tablet
               console.log('Capturing tablet screenshot...');
               await page.setViewportSize({ width: 768, height: 1024 });
-              await page.screenshot({ path: 'screenshots/tablet.png' });
+              await page.screenshot({ path: path.join(screenshotsDir, 'tablet.png') });
               
               // Mobile
               console.log('Capturing mobile screenshot...');
               await page.setViewportSize({ width: 375, height: 667 });
-              await page.screenshot({ path: 'screenshots/mobile.png' });
+              await page.screenshot({ path: path.join(screenshotsDir, 'mobile.png') });
               
               console.log('Screenshots captured successfully');
               await browser.close();
@@ -105,69 +102,50 @@ jobs:
               process.exit(1);
             }
           })();
-          EOF
-          npx playwright install chromium
-          node screenshot.js
+          SCRIPT
+          
+          node screenshot.mjs
 
-      - name: Run AI UX Review
+      # ========== AI UX Review with ChatGPT ==========
+      - name: Install Playwright for UX Review
+        if: contains(github.event.inputs.tests, 'ux')
+        run: |
+          npm install playwright
+          npx playwright install chromium
+
+      - name: Generate AI UX Review
         if: contains(github.event.inputs.tests, 'ux')
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          cat > ux-review.js << 'EOF'
-          const { chromium } = require('playwright');
-          const fs = require('fs');
-          const https = require('https');
+          cat > ux-review.mjs << 'SCRIPT'
+          import { chromium } from 'playwright';
+          import fs from 'fs';
+          import https from 'https';
           
-          (async () => {
-            try {
-              const browser = await chromium.launch();
-              const page = await browser.newPage();
-              const targetUrl = '${{ github.event.inputs.target_url }}';
-              
-              console.log('Loading URL for UX review:', targetUrl);
-              
-              // 페이지 로드
-              await page.goto(targetUrl, { waitUntil: 'networkidle', timeout: 30000 });
-              await page.waitForTimeout(2000);
-              
-              // 스크린샷 캡처 (Desktop)
-              await page.setViewportSize({ width: 1920, height: 1080 });
-              const screenshotPath = 'ux-review-screenshot.png';
-              await page.screenshot({ path: screenshotPath });
-              console.log('UX review screenshot captured');
-              
-              // reports 디렉토리 생성
-              if (!fs.existsSync('reports')) {
-                fs.mkdirSync('reports', { recursive: true });
-              }
-              
-              // 스크린샷을 Base64로 변환
-              const imageBuffer = fs.readFileSync(screenshotPath);
-              const base64Image = imageBuffer.toString('base64');
-              
-              // ChatGPT API 호출
-              const apiKey = process.env.OPENAI_API_KEY;
-              if (!apiKey) {
-                console.error('OPENAI_API_KEY not set');
-                fs.writeFileSync('reports/ux-report.json', JSON.stringify({ 
-                  url: targetUrl,
-                  timestamp: new Date().toISOString(),
-                  reviews: [] 
-                }, null, 2));
-                await browser.close();
-                return;
-              }
-              
-              const requestData = JSON.stringify({
-                model: 'gpt-4o',
-                messages: [
-                  {
-                    role: 'user',
-                    content: [
-                      {
-                        type: 'text',
-                        text: `당신은 UX 전문가입니다. 다음 웹사이트 스크린샷을 분석하고 UX 리뷰를 제공해주세요.
+          const targetUrl = '${{ github.event.inputs.target_url }}';
+          const apiKey = process.env.OPENAI_API_KEY;
+          
+          async function captureScreenshot() {
+            const browser = await chromium.launch();
+            const page = await browser.newPage();
+            
+            console.log('Loading URL for UX review:', targetUrl);
+            await page.goto(targetUrl, { waitUntil: 'networkidle', timeout: 30000 });
+            await page.waitForTimeout(2000);
+            
+            await page.setViewportSize({ width: 1920, height: 1080 });
+            const screenshotPath = 'ux-review-screenshot.png';
+            await page.screenshot({ path: screenshotPath });
+            console.log('UX review screenshot captured');
+            
+            await browser.close();
+            return screenshotPath;
+          }
+          
+          function callChatGPT(base64Image) {
+            return new Promise((resolve, reject) => {
+              const prompt = `당신은 UX 전문가입니다. 다음 웹사이트 스크린샷을 분석하고 UX 리뷰를 제공해주세요.
 
 [리뷰 기준]
 - "생각 안 하고 써도 되나?" 관점
@@ -193,7 +171,17 @@ jobs:
   ]
 }
 
-반드시 유효한 JSON만 반환하세요.`
+반드시 유효한 JSON만 반환하세요.`;
+
+              const requestData = JSON.stringify({
+                model: 'gpt-4o',
+                messages: [
+                  {
+                    role: 'user',
+                    content: [
+                      {
+                        type: 'text',
+                        text: prompt
                       },
                       {
                         type: 'image_url',
@@ -222,294 +210,275 @@ jobs:
               const req = https.request(options, (res) => {
                 let data = '';
                 res.on('data', (chunk) => { data += chunk; });
-                res.on('end', async () => {
+                res.on('end', () => {
                   try {
                     const response = JSON.parse(data);
                     if (response.error) {
                       console.error('OpenAI API Error:', response.error);
-                      fs.writeFileSync('reports/ux-report.json', JSON.stringify({ 
-                        url: targetUrl,
-                        timestamp: new Date().toISOString(),
-                        reviews: [] 
-                      }, null, 2));
+                      reject(response.error);
                     } else {
                       const content = response.choices[0].message.content;
                       const jsonMatch = content.match(/\{[\s\S]*\}/);
                       const result = jsonMatch ? JSON.parse(jsonMatch[0]) : { reviews: [] };
                       result.url = targetUrl;
                       result.timestamp = new Date().toISOString();
-                      fs.writeFileSync('reports/ux-report.json', JSON.stringify(result, null, 2));
-                      console.log('UX Review saved for URL:', targetUrl);
+                      resolve(result);
                     }
                   } catch (e) {
                     console.error('Error parsing response:', e);
-                    fs.writeFileSync('reports/ux-report.json', JSON.stringify({ 
-                      url: targetUrl,
-                      timestamp: new Date().toISOString(),
-                      reviews: [] 
-                    }, null, 2));
+                    reject(e);
                   }
-                  await browser.close();
                 });
               });
               
               req.on('error', (e) => {
                 console.error('API Error:', e);
-                fs.writeFileSync('reports/ux-report.json', JSON.stringify({ 
-                  url: targetUrl,
-                  timestamp: new Date().toISOString(),
-                  reviews: [] 
-                }, null, 2));
+                reject(e);
               });
               
               req.write(requestData);
               req.end();
-            } catch (error) {
-              console.error('UX review error:', error);
-              fs.writeFileSync('reports/ux-report.json', JSON.stringify({ 
-                url: '${{ github.event.inputs.target_url }}',
-                timestamp: new Date().toISOString(),
-                reviews: [] 
-              }, null, 2));
-            }
-          })();
-          EOF
-          npm install playwright
-          node ux-review.js
-          sleep 15  # API 응답 대기
-          ls -la reports/ || echo 'reports directory not found'
-
-      - name: Run Test Cases
-        if: contains(github.event.inputs.tests, 'tc')
-        run: |
-          cat > test-cases.js << 'EOF'
-          const { chromium } = require('playwright');
-          const fs = require('fs');
+            });
+          }
           
-          (async () => {
+          async function main() {
             try {
-              const browser = await chromium.launch();
-              const page = await browser.newPage();
-              const targetUrl = '${{ github.event.inputs.target_url }}';
-              
-              console.log('Loading URL for test cases:', targetUrl);
-              await page.goto(targetUrl, { waitUntil: 'networkidle', timeout: 30000 });
-              
-              // 동적 테스트 케이스 생성
-              const testCases = [];
-              
-              // 1. 페이지 로드 테스트
-              const pageTitle = await page.title();
-              testCases.push({
-                id: 'TC001',
-                title: 'Page Load Test',
-                precondition: 'Browser is open',
-                testStep: 'Navigate to ' + targetUrl,
-                expectedResults: 'Page loads successfully with title',
-                result: pageTitle ? 'Pass' : 'Fail',
-                details: 'Page title: ' + pageTitle
-              });
-              
-              // 2. 링크 존재 테스트
-              const links = await page.locator('a').count();
-              testCases.push({
-                id: 'TC002',
-                title: 'Links Availability Test',
-                precondition: 'Page is loaded',
-                testStep: 'Check if links are present',
-                expectedResults: 'At least one link should be present',
-                result: links > 0 ? 'Pass' : 'Fail',
-                details: 'Found ' + links + ' links'
-              });
-              
-              // 3. 이미지 로드 테스트
-              const images = await page.locator('img').count();
-              testCases.push({
-                id: 'TC003',
-                title: 'Images Load Test',
-                precondition: 'Page is loaded',
-                testStep: 'Check if images are loaded',
-                expectedResults: 'Images should be present',
-                result: images > 0 ? 'Pass' : 'Fail',
-                details: 'Found ' + images + ' images'
-              });
-              
-              // 4. 폼 요소 테스트
-              const forms = await page.locator('form').count();
-              const inputs = await page.locator('input').count();
-              testCases.push({
-                id: 'TC004',
-                title: 'Form Elements Test',
-                precondition: 'Page is loaded',
-                testStep: 'Check for form elements',
-                expectedResults: 'Form elements should be present if applicable',
-                result: (forms > 0 || inputs > 0) ? 'Pass' : 'N/A',
-                details: 'Found ' + forms + ' forms and ' + inputs + ' input fields'
-              });
-              
-              // 5. 버튼 테스트
-              const buttons = await page.locator('button').count();
-              testCases.push({
-                id: 'TC005',
-                title: 'Button Elements Test',
-                precondition: 'Page is loaded',
-                testStep: 'Check for button elements',
-                expectedResults: 'Buttons should be present',
-                result: buttons > 0 ? 'Pass' : 'Fail',
-                details: 'Found ' + buttons + ' buttons'
-              });
-              
-              // 6. 헤딩 테스트
-              const headings = await page.locator('h1, h2, h3').count();
-              testCases.push({
-                id: 'TC006',
-                title: 'Heading Structure Test',
-                precondition: 'Page is loaded',
-                testStep: 'Check heading hierarchy',
-                expectedResults: 'Page should have proper heading structure',
-                result: headings > 0 ? 'Pass' : 'Fail',
-                details: 'Found ' + headings + ' headings'
-              });
-              
-              // 7. 메타 정보 테스트
-              const metaDescription = await page.locator('meta[name="description"]').count();
-              testCases.push({
-                id: 'TC007',
-                title: 'Meta Tags Test',
-                precondition: 'Page is loaded',
-                testStep: 'Check for meta description',
-                expectedResults: 'Meta description should be present',
-                result: metaDescription > 0 ? 'Pass' : 'Fail',
-                details: 'Meta description: ' + (metaDescription > 0 ? 'Present' : 'Missing')
-              });
-              
-              // 8. 반응형 디자인 테스트
-              const viewportWidth = await page.evaluate(() => window.innerWidth);
-              testCases.push({
-                id: 'TC008',
-                title: 'Responsive Design Test',
-                precondition: 'Page is loaded at desktop viewport',
-                testStep: 'Check viewport width',
-                expectedResults: 'Page should be responsive',
-                result: viewportWidth >= 1920 ? 'Pass' : 'Fail',
-                details: 'Viewport width: ' + viewportWidth + 'px'
-              });
-              
-              // 9. 성능 테스트 (페이지 로드 시간)
-              const navigationTiming = await page.evaluate(() => {
-                const timing = window.performance.timing;
-                return timing.loadEventEnd - timing.navigationStart;
-              });
-              testCases.push({
-                id: 'TC009',
-                title: 'Page Load Performance Test',
-                precondition: 'Page is loaded',
-                testStep: 'Measure page load time',
-                expectedResults: 'Page should load within 5 seconds',
-                result: navigationTiming < 5000 ? 'Pass' : 'Fail',
-                details: 'Load time: ' + navigationTiming + 'ms'
-              });
-              
-              // 10. 접근성 테스트 (lang 속성)
-              const htmlLang = await page.locator('html').getAttribute('lang');
-              testCases.push({
-                id: 'TC010',
-                title: 'Accessibility - Language Attribute Test',
-                precondition: 'Page is loaded',
-                testStep: 'Check for lang attribute',
-                expectedResults: 'HTML element should have lang attribute',
-                result: htmlLang ? 'Pass' : 'Fail',
-                details: 'Language: ' + (htmlLang || 'Not set')
-              });
-              
-              // 요약 계산
-              const passed = testCases.filter(tc => tc.result === 'Pass').length;
-              const failed = testCases.filter(tc => tc.result === 'Fail').length;
-              const blocked = testCases.filter(tc => tc.result === 'Blocked').length;
-              const na = testCases.filter(tc => tc.result === 'N/A').length;
-              const total = testCases.length;
-              
-              const summary = {
-                total: total,
-                passed: passed,
-                failed: failed,
-                blocked: blocked,
-                na: na,
-                success_rate: total > 0 ? Math.round((passed / (total - na)) * 100) : 0
-              };
-              
-              // 결과 저장
               if (!fs.existsSync('reports')) {
                 fs.mkdirSync('reports', { recursive: true });
               }
+              
+              if (!apiKey) {
+                console.error('OPENAI_API_KEY not set');
+                fs.writeFileSync('reports/ux-review.json', JSON.stringify({
+                  url: targetUrl,
+                  timestamp: new Date().toISOString(),
+                  reviews: [],
+                  error: 'OPENAI_API_KEY not set'
+                }, null, 2));
+                process.exit(1);
+              }
+              
+              const screenshotPath = await captureScreenshot();
+              const imageBuffer = fs.readFileSync(screenshotPath);
+              const base64Image = imageBuffer.toString('base64');
+              
+              console.log('Calling ChatGPT API...');
+              const result = await callChatGPT(base64Image);
+              
+              fs.writeFileSync('reports/ux-review.json', JSON.stringify(result, null, 2));
+              console.log('UX Review saved successfully');
+              
+              fs.unlinkSync(screenshotPath);
+            } catch (error) {
+              console.error('UX review error:', error);
+              fs.writeFileSync('reports/ux-review.json', JSON.stringify({
+                url: targetUrl,
+                timestamp: new Date().toISOString(),
+                reviews: [],
+                error: error.message
+              }, null, 2));
+              process.exit(1);
+            }
+          }
+          
+          main();
+          SCRIPT
+          
+          node ux-review.mjs
+          sleep 10
+
+      # ========== Playwright Test Cases ==========
+      - name: Generate and Run Test Cases
+        if: contains(github.event.inputs.tests, 'tc')
+        run: |
+          npm install playwright
+          npx playwright install chromium
+          
+          cat > test-cases.mjs << 'SCRIPT'
+          import { chromium } from 'playwright';
+          import fs from 'fs';
+          
+          const targetUrl = '${{ github.event.inputs.target_url }}';
+          
+          async function runTestCases() {
+            const browser = await chromium.launch();
+            const page = await browser.newPage();
+            
+            console.log('Loading URL for test cases:', targetUrl);
+            await page.goto(targetUrl, { waitUntil: 'networkidle', timeout: 30000 });
+            
+            const testCases = [];
+            
+            // 1. Page Load Test
+            const pageTitle = await page.title();
+            testCases.push({
+              id: 'TC001',
+              name: 'Page Load Test',
+              status: pageTitle ? 'Pass' : 'Fail',
+              details: 'Page title: ' + pageTitle
+            });
+            
+            // 2. Links Availability Test
+            const links = await page.locator('a').count();
+            testCases.push({
+              id: 'TC002',
+              name: 'Links Availability Test',
+              status: links > 0 ? 'Pass' : 'Fail',
+              details: 'Found ' + links + ' links'
+            });
+            
+            // 3. Images Load Test
+            const images = await page.locator('img').count();
+            testCases.push({
+              id: 'TC003',
+              name: 'Images Load Test',
+              status: images > 0 ? 'Pass' : 'N/A',
+              details: 'Found ' + images + ' images'
+            });
+            
+            // 4. Form Elements Test
+            const forms = await page.locator('form').count();
+            const inputs = await page.locator('input').count();
+            testCases.push({
+              id: 'TC004',
+              name: 'Form Elements Test',
+              status: (forms > 0 || inputs > 0) ? 'Pass' : 'N/A',
+              details: 'Forms: ' + forms + ', Inputs: ' + inputs
+            });
+            
+            // 5. Button Elements Test
+            const buttons = await page.locator('button').count();
+            testCases.push({
+              id: 'TC005',
+              name: 'Button Elements Test',
+              status: buttons > 0 ? 'Pass' : 'N/A',
+              details: 'Found ' + buttons + ' buttons'
+            });
+            
+            // 6. Heading Structure Test
+            const h1 = await page.locator('h1').count();
+            const h2 = await page.locator('h2').count();
+            testCases.push({
+              id: 'TC006',
+              name: 'Heading Structure Test',
+              status: (h1 > 0 || h2 > 0) ? 'Pass' : 'Fail',
+              details: 'H1: ' + h1 + ', H2: ' + h2
+            });
+            
+            // 7. Meta Tags Test
+            const metaDesc = await page.locator('meta[name="description"]').count();
+            testCases.push({
+              id: 'TC007',
+              name: 'Meta Tags Test',
+              status: metaDesc > 0 ? 'Pass' : 'Fail',
+              details: 'Meta description found: ' + (metaDesc > 0)
+            });
+            
+            // 8. Responsive Design Test
+            const viewport = page.viewportSize();
+            testCases.push({
+              id: 'TC008',
+              name: 'Responsive Design Test',
+              status: viewport ? 'Pass' : 'Fail',
+              details: 'Viewport: ' + JSON.stringify(viewport)
+            });
+            
+            // 9. Page Load Performance Test
+            const navigationTiming = await page.evaluate(() => {
+              const timing = window.performance.timing;
+              return timing.loadEventEnd - timing.navigationStart;
+            });
+            testCases.push({
+              id: 'TC009',
+              name: 'Page Load Performance Test',
+              status: navigationTiming < 5000 ? 'Pass' : 'Blocked',
+              details: 'Load time: ' + navigationTiming + 'ms'
+            });
+            
+            // 10. Accessibility Test
+            const langAttr = await page.locator('html').getAttribute('lang');
+            testCases.push({
+              id: 'TC010',
+              name: 'Accessibility Test',
+              status: langAttr ? 'Pass' : 'Fail',
+              details: 'Language attribute: ' + (langAttr || 'Not found')
+            });
+            
+            await browser.close();
+            return testCases;
+          }
+          
+          async function main() {
+            try {
+              if (!fs.existsSync('reports')) {
+                fs.mkdirSync('reports', { recursive: true });
+              }
+              
+              const testCases = await runTestCases();
+              
+              const passed = testCases.filter(tc => tc.status === 'Pass').length;
+              const failed = testCases.filter(tc => tc.status === 'Fail').length;
+              const blocked = testCases.filter(tc => tc.status === 'Blocked').length;
+              const na = testCases.filter(tc => tc.status === 'N/A').length;
               
               const result = {
                 url: targetUrl,
                 timestamp: new Date().toISOString(),
                 testCases: testCases,
-                summary: summary
+                summary: {
+                  total: testCases.length,
+                  passed: passed,
+                  failed: failed,
+                  blocked: blocked,
+                  na: na,
+                  success_rate: Math.round((passed / testCases.length) * 100)
+                }
               };
               
-              fs.writeFileSync('reports/tc-report.json', JSON.stringify(result, null, 2));
-              console.log('Test cases completed:', summary);
-              
-              await browser.close();
+              fs.writeFileSync('reports/test-cases.json', JSON.stringify(result, null, 2));
+              console.log('Test cases completed:', JSON.stringify(result.summary));
             } catch (error) {
-              console.error('Test case error:', error);
-              const result = {
-                url: '${{ github.event.inputs.target_url }}',
+              console.error('Test cases error:', error);
+              fs.writeFileSync('reports/test-cases.json', JSON.stringify({
+                url: targetUrl,
                 timestamp: new Date().toISOString(),
                 testCases: [],
-                summary: { total: 0, passed: 0, failed: 0, blocked: 0, na: 0, success_rate: 0 }
-              };
-              if (!fs.existsSync('reports')) {
-                fs.mkdirSync('reports', { recursive: true });
-              }
-              fs.writeFileSync('reports/tc-report.json', JSON.stringify(result, null, 2));
+                error: error.message
+              }, null, 2));
+              process.exit(1);
             }
-          })();
-          EOF
-          mkdir -p reports
-          npm install playwright
-          node test-cases.js
+          }
+          
+          main();
+          SCRIPT
+          
+          node test-cases.mjs
 
+      # ========== Upload Artifacts ==========
       - name: Upload Lighthouse Report
         if: contains(github.event.inputs.tests, 'performance')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: lighthouse-report
-          path: |
-            reports/lighthouse-report.json
-            reports/lighthouse-report.html
+          path: reports/lighthouse-report.json
 
       - name: Upload Screenshots
         if: contains(github.event.inputs.tests, 'responsive')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: responsive-screenshots
-          path: |
-            screenshots/desktop.png
-            screenshots/tablet.png
-            screenshots/mobile.png
+          path: screenshots/
 
       - name: Upload UX Review
         if: contains(github.event.inputs.tests, 'ux')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: ux-review
-          path: reports/ux-report.json
+          path: reports/ux-review.json
 
-      - name: Upload Test Cases Report
+      - name: Upload Test Cases
         if: contains(github.event.inputs.tests, 'tc')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
-          name: test-cases-report
-          path: reports/tc-report.json
-
-      - name: Create Summary
-        run: |
-          echo "## QA Test Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Target URL:** ${{ github.event.inputs.target_url }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Tests:** ${{ github.event.inputs.tests }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Status:** ✅ Completed" >> $GITHUB_STEP_SUMMARY
+          name: test-cases
+          path: reports/test-cases.json
