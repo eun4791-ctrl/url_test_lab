@@ -13,4 +13,5 @@ export const ENV = {
   forgeApiUrl: process.env.BUILT_IN_FORGE_API_URL ?? "",
   forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? "",
   githubToken: process.env.GITHUB_TOKEN ?? "",
+  openaiApiKey: process.env.OPENAI_API_KEY ?? "",
 };
