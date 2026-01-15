@@ -177,15 +177,40 @@ jobs:
 
           node test-cases.mjs
 
-      # ================== Artifacts ==================
-      - name: Upload QA Artifacts
+      # ================== Artifacts 분리 업로드 ==================
+      - name: Upload Lighthouse Report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: qa-artifacts
-          path: |
-            reports/
-            screenshots/
+          name: lighthouse-report
+          path: reports/lighthouse.*
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload Responsive Screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: responsive-screenshots
+          path: screenshots/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload UX Review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ux-review
+          path: reports/ux-review.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload Test Cases Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-cases-report
+          path: reports/tc-report.json
           if-no-files-found: ignore
           retention-days: 7
 
@@ -196,4 +221,4 @@ jobs:
           echo "## ✅ QA Automation Summary" >> $GITHUB_STEP_SUMMARY
           echo "- URL: ${{ github.event.inputs.target_url }}" >> $GITHUB_STEP_SUMMARY
           echo "- Tests: ${{ github.event.inputs.tests }}" >> $GITHUB_STEP_SUMMARY
-          echo "- 결과는 Artifacts에서 확인" >> $GITHUB_STEP_SUMMARY
+          echo "- Lighthouse / Screenshots / UX / TC 결과는 Artifacts 확인" >> $GITHUB_STEP_SUMMARY
