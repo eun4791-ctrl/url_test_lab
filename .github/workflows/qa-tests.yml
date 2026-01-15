@@ -18,6 +18,7 @@ jobs:
     timeout-minutes: 45
 
     steps:
+      # ================== 기본 세팅 ==================
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -29,7 +30,7 @@ jobs:
       - name: Prepare directories
         run: mkdir -p reports screenshots
 
-      # ================== Lighthouse Performance ==================
+      # ================== Lighthouse (Performance) ==================
       - name: Install Chrome
         if: contains(github.event.inputs.tests, 'performance')
         run: |
@@ -45,24 +46,25 @@ jobs:
         continue-on-error: true
         run: |
           lighthouse "${{ github.event.inputs.target_url }}" \
+            --chrome-path=/usr/bin/google-chrome \
             --chrome-flags="--headless --no-sandbox" \
             --output=json \
             --output-path=reports/lighthouse.json || true
 
           lighthouse "${{ github.event.inputs.target_url }}" \
+            --chrome-path=/usr/bin/google-chrome \
             --chrome-flags="--headless --no-sandbox" \
             --output=html \
             --output-path=reports/lighthouse.html || true
 
-      # ================== Playwright Screenshots ==================
-      - name: Install Playwright
+      # ================== Playwright (Responsive Screenshots) ==================
+      - name: Install Playwright (Responsive)
         if: contains(github.event.inputs.tests, 'responsive')
         run: |
-          npm init -y
-          npm install playwright
+          npm install playwright@latest
           npx playwright install --with-deps chromium
 
-      - name: Capture Responsive Screenshots
+      - name: Capture Screenshots
         if: contains(github.event.inputs.tests, 'responsive')
         continue-on-error: true
         run: |
@@ -83,15 +85,15 @@ jobs:
 
             await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-            const shots = [
+            const viewports = [
               { name: 'desktop', w: 1920, h: 1080 },
               { name: 'tablet', w: 768, h: 1024 },
               { name: 'mobile', w: 375, h: 667 }
             ];
 
-            for (const s of shots) {
-              await page.setViewportSize({ width: s.w, height: s.h });
-              await page.screenshot({ path: `${dir}/${s.name}.png` });
+            for (const v of viewports) {
+              await page.setViewportSize({ width: v.w, height: v.h });
+              await page.screenshot({ path: `${dir}/${v.name}.png` });
             }
 
             await browser.close();
@@ -102,7 +104,7 @@ jobs:
 
           node screenshot.mjs
 
-      # ================== UX Review (Mock AI) ==================
+      # ================== UX Review (Mock) ==================
       - name: Generate UX Review
         if: contains(github.event.inputs.tests, 'ux')
         run: |
@@ -112,11 +114,11 @@ jobs:
           const report = {
             url: '${{ github.event.inputs.target_url }}',
             generatedAt: new Date().toISOString(),
-            score: 7.5,
+            score: 7.4,
             issues: [
-              { level: '상', issue: 'CTA 가시성 부족', suggestion: '주요 버튼 강조' },
-              { level: '중', issue: '로딩 상태 부족', suggestion: 'Progress UI 추가' },
-              { level: '하', issue: '모바일 버튼 크기 작음', suggestion: '48px 이상 확대' }
+              { priority: '상', issue: 'CTA 가시성 부족', suggestion: '주요 버튼 강조' },
+              { priority: '중', issue: '로딩 상태 미흡', suggestion: '로딩 UI 추가' },
+              { priority: '하', issue: '모바일 버튼 작음', suggestion: '48px 이상 권장' }
             ]
           };
 
@@ -129,7 +131,7 @@ jobs:
       - name: Run Test Cases
         if: contains(github.event.inputs.tests, 'tc')
         run: |
-          npm install playwright
+          npm install playwright@latest
           npx playwright install --with-deps chromium
 
           cat << 'EOF' > test-cases.mjs
@@ -139,11 +141,20 @@ jobs:
           const url = '${{ github.event.inputs.target_url }}';
           const results = [];
 
-          const add = (id, name, pass, note = '') =>
-            results.push({ id, name, result: pass ? 'Pass' : 'Fail', note });
+          const add = (id, title, pass, note = '') => {
+            results.push({
+              id,
+              title,
+              result: pass ? 'Pass' : 'Fail',
+              note
+            });
+          };
 
           const run = async () => {
-            const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+            const browser = await chromium.launch({
+              headless: true,
+              args: ['--no-sandbox']
+            });
             const page = await browser.newPage();
 
             await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
@@ -151,6 +162,7 @@ jobs:
             add('TC-01', '페이지 로드', !!(await page.title()));
             add('TC-02', '버튼 존재', (await page.locator('button').count()) > 0);
             add('TC-03', '이미지 존재', (await page.locator('img').count()) >= 0);
+            add('TC-04', '링크 존재', (await page.locator('a').count()) > 0);
 
             await browser.close();
 
@@ -165,12 +177,12 @@ jobs:
 
           node test-cases.mjs
 
-      # ================== Upload Artifacts ==================
-      - name: Upload Reports
+      # ================== Artifacts ==================
+      - name: Upload QA Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: qa-reports
+          name: qa-artifacts
           path: |
             reports/
             screenshots/
@@ -181,7 +193,7 @@ jobs:
       - name: Create Summary
         if: always()
         run: |
-          echo "## ✅ QA Automation Results" >> $GITHUB_STEP_SUMMARY
+          echo "## ✅ QA Automation Summary" >> $GITHUB_STEP_SUMMARY
           echo "- URL: ${{ github.event.inputs.target_url }}" >> $GITHUB_STEP_SUMMARY
           echo "- Tests: ${{ github.event.inputs.tests }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Artifacts 확인 필요" >> $GITHUB_STEP_SUMMARY
+          echo "- 결과는 Artifacts에서 확인" >> $GITHUB_STEP_SUMMARY
