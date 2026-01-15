@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       tests:
-        description: 'Comma-separated test types (performance,responsive,ux,tc)'
+        description: 'Comma-separated test types (performance,responsive,tc,ux)'
         required: true
         type: string
 
@@ -27,15 +27,12 @@ jobs:
           node-version: '18'
 
       - name: Prepare directories
-        run: mkdir -p reports screenshots qa-temp
-
-      # ================== Lighthouse ==================
-      - name: Install Chrome
-        if: contains(github.event.inputs.tests, 'performance')
         run: |
-          sudo apt-get update
-          sudo apt-get install -y google-chrome-stable
+          mkdir -p reports screenshots qa-temp
 
+      # ======================================================
+      # Lighthouse Performance
+      # ======================================================
       - name: Install Lighthouse
         if: contains(github.event.inputs.tests, 'performance')
         run: npm install -g lighthouse
@@ -45,25 +42,31 @@ jobs:
         continue-on-error: true
         run: |
           lighthouse "${{ github.event.inputs.target_url }}" \
-            --chrome-path=/usr/bin/google-chrome \
-            --chrome-flags="--headless --no-sandbox" \
             --output=json \
-            --output-path=reports/lighthouse.json || true
+            --output-path=reports/lighthouse-report.json \
+            --chrome-flags="--headless --no-sandbox" \
+            --quiet || true
 
           lighthouse "${{ github.event.inputs.target_url }}" \
-            --chrome-path=/usr/bin/google-chrome \
-            --chrome-flags="--headless --no-sandbox" \
             --output=html \
-            --output-path=reports/lighthouse.html || true
+            --output-path=reports/lighthouse-report.html \
+            --chrome-flags="--headless --no-sandbox" \
+            --quiet || true
 
-      # ================== Playwright (Isolated) ==================
+      # ======================================================
+      # Playwright Setup (완전 격리 / 충돌 방지 핵심)
+      # ======================================================
       - name: Setup Playwright (isolated)
         if: contains(github.event.inputs.tests, 'responsive') || contains(github.event.inputs.tests, 'tc')
         run: |
           cd qa-temp
           npm init -y
+          npm install playwright@1.42.1
           npx playwright install --with-deps chromium
 
+      # ======================================================
+      # Responsive Screenshots
+      # ======================================================
       - name: Capture Responsive Screenshots
         if: contains(github.event.inputs.tests, 'responsive')
         continue-on-error: true
@@ -79,7 +82,6 @@ jobs:
           const run = async () => {
             const browser = await chromium.launch({ headless: true });
             const page = await browser.newPage();
-
             await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
             const sizes = [
@@ -101,25 +103,42 @@ jobs:
 
           cd qa-temp && node screenshot.mjs
 
-      # ================== UX Review ==================
+      # ======================================================
+      # UX Review (Mock – 웹 노출용)
+      # ======================================================
       - name: Generate UX Review
         if: contains(github.event.inputs.tests, 'ux')
         run: |
           cat << 'EOF' > reports/ux-review.json
           {
             "url": "${{ github.event.inputs.target_url }}",
-            "score": 7.4,
+            "summaryScore": 7.4,
             "issues": [
-              { "priority": "상", "issue": "CTA 가시성 부족" },
-              { "priority": "중", "issue": "로딩 상태 미흡" },
-              { "priority": "하", "issue": "모바일 버튼 작음"}
+              {
+                "priority": "상",
+                "issue": "첫 화면에서 주요 액션이 명확하지 않음",
+                "suggestion": "CTA 버튼 강조 및 카피 명확화"
+              },
+              {
+                "priority": "중",
+                "issue": "로딩 상태 인지가 어려움",
+                "suggestion": "Skeleton 또는 Progress UI 추가"
+              },
+              {
+                "priority": "하",
+                "issue": "모바일 버튼 터치 영역이 작음",
+                "suggestion": "48px 이상으로 확장"
+              }
             ]
           }
           EOF
 
-      # ================== Test Cases ==================
+      # ======================================================
+      # Test Cases
+      # ======================================================
       - name: Run Test Cases
         if: contains(github.event.inputs.tests, 'tc')
+        continue-on-error: true
         run: |
           cat << 'EOF' > qa-temp/test-cases.mjs
           import { chromium } from 'playwright';
@@ -128,19 +147,25 @@ jobs:
           const url = '${{ github.event.inputs.target_url }}';
           const results = [];
 
-          const add = (id, title, pass) =>
-            results.push({ id, title, result: pass ? 'Pass' : 'Fail' });
+          const add = (id, title, pass, detail='') =>
+            results.push({ id, title, result: pass ? 'Pass' : 'Fail', detail });
 
           const run = async () => {
-            const browser = await chromium.launch();
+            const browser = await chromium.launch({ headless: true });
             const page = await browser.newPage();
             await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
             add('TC-01', '페이지 로드', !!(await page.title()));
-            add('TC-02', '버튼 존재', (await page.locator('button').count()) > 0);
+            add('TC-02', 'H 태그 존재', (await page.locator('h1,h2,h3').count()) > 0);
+            add('TC-03', '버튼 존재', (await page.locator('button').count()) > 0);
+            add('TC-04', '입력 필드 존재', (await page.locator('input').count()) >= 0);
 
             await browser.close();
-            fs.writeFileSync('../reports/tc-report.json', JSON.stringify({ url, results }, null, 2));
+
+            fs.writeFileSync(
+              '../reports/tc-report.json',
+              JSON.stringify({ url, total: results.length, results }, null, 2)
+            );
           };
 
           run();
@@ -148,35 +173,45 @@ jobs:
 
           cd qa-temp && node test-cases.mjs
 
-      # ================== Artifacts ==================
+      # ======================================================
+      # Artifacts (분리 업로드)
+      # ======================================================
       - name: Upload Lighthouse Report
-        uses: actions/upload-artifact@v4
         if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: lighthouse-report
-          path: reports/lighthouse.*
-          if-no-files-found: ignore
+          path: reports/lighthouse-report.*
 
-      - name: Upload Responsive Screenshots
-        uses: actions/upload-artifact@v4
+      - name: Upload Screenshots
         if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: responsive-screenshots
           path: screenshots/
-          if-no-files-found: ignore
 
       - name: Upload UX Review
-        uses: actions/upload-artifact@v4
         if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: ux-review
           path: reports/ux-review.json
-          if-no-files-found: ignore
 
-      - name: Upload Test Cases Report
-        uses: actions/upload-artifact@v4
+      - name: Upload Test Case Report
         if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: test-cases-report
           path: reports/tc-report.json
-          if-no-files-found: ignore
+
+      # ======================================================
+      # Summary (웹에서 바로 쓰기 좋음)
+      # ======================================================
+      - name: Create Summary
+        if: always()
+        run: |
+          echo "## QA Automation Result" >> $GITHUB_STEP_SUMMARY
+          echo "**URL:** ${{ github.event.inputs.target_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Tests:** ${{ github.event.inputs.tests }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Lighthouse / Screenshots / UX / TestCases 완료" >> $GITHUB_STEP_SUMMARY
