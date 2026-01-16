@@ -6,9 +6,10 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AlertCircle, CheckCircle2, Clock, Zap, ChevronDown, ChevronUp } from "lucide-react";
 import { toast } from "sonner";
-import { trpc } from "@/lib/trpc";
+import JSZip from "jszip";
 
 type TestType = "performance" | "responsive" | "ux" | "tc";
+type TestState = "IDLE" | "RUNNING" | "PARTIAL_DONE" | "COMPLETED" | "FAILED";
 
 interface LighthouseScore {
   performance: number;
@@ -216,18 +217,21 @@ export default function Home() {
   const [url, setUrl] = React.useState("");
   const [selectedTests, setSelectedTests] = React.useState<TestType[]>([]);
   const [results, setResults] = React.useState<TestResult[]>([]);
-  const [isLoading, setIsLoading] = React.useState(false);
+  const [testState, setTestState] = React.useState<TestState>("IDLE");
   const [runId, setRunId] = React.useState<number | null>(null);
   const [pollCount, setPollCount] = React.useState(0);
+  const [screenshots, setScreenshots] = React.useState<ResponsiveScreenshots>({});
+  const [screenshotBase64, setScreenshotBase64] = React.useState<ResponsiveScreenshots>({});
+  const [uxReviews, setUxReviews] = React.useState<UXReview[]>([]);
+  const [testCases, setTestCases] = React.useState<TestCase[]>([]);
+  const [testSummary, setTestSummary] = React.useState<any>(null);
 
-  // tRPC 쿼리/뮤테이션
-  const triggerWorkflowMutation = trpc.qa.triggerWorkflow.useMutation();
-  const getLatestRunQuery = trpc.qa.getLatestRun.useQuery(undefined, { enabled: false });
-  const checkRunStatusQuery = trpc.qa.checkRunStatus.useQuery({ runId: runId || 0 }, { enabled: false });
-  const getArtifactsQuery = trpc.qa.getArtifacts.useQuery({ runId: runId || 0 }, { enabled: false });
-  const downloadArtifactMutation = trpc.qa.downloadArtifact.useMutation();
-  const parseArtifactJsonMutation = trpc.qa.parseArtifactJson.useMutation();
-  const parseScreenshotsMutation = trpc.qa.parseScreenshots.useMutation();
+  const GITHUB_TOKEN = import.meta.env.VITE_GITHUB_TOKEN || "";
+  const GITHUB_REPO = "eun4791-ctrl/ai_web_test";
+
+  if (!GITHUB_TOKEN) {
+    console.warn("VITE_GITHUB_TOKEN is not set");
+  }
 
   // URL 검증
   const validateUrl = (inputUrl: string): boolean => {
@@ -247,115 +251,430 @@ export default function Home() {
     return inputUrl;
   };
 
-  // 결과 다운로드 및 파싱
-  const downloadAndParseArtifact = async (artifactName: string, fileName: string) => {
-    if (!runId) return null;
+  // ✅ STEP 1: Workflow 실행 후 run_id 확보 (polling으로)
+  const triggerWorkflow = async (targetUrl: string, tests: string): Promise<number | null> => {
     try {
-      const downloadResult = await downloadArtifactMutation.mutateAsync({
-        runId,
-        artifactName,
-      });
+      console.log("Triggering workflow with URL:", targetUrl, "Tests:", tests);
 
-      if (!downloadResult.success || !downloadResult.data) {
-        console.error(`Failed to download ${artifactName}:`, downloadResult.error);
-        return null;
-      }
-
-      // 스크린샷은 Base64로 변환
-      if (artifactName === "responsive-screenshots") {
-        const parseResult = await parseScreenshotsMutation.mutateAsync({
-          base64Data: downloadResult.data,
-        });
-        if (!parseResult.success) {
-          console.error(`Failed to parse screenshots:`, parseResult.error);
-          return null;
+      const response = await fetch(
+        `https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/qa-tests.yml/dispatches`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `token ${GITHUB_TOKEN}`,
+            "Content-Type": "application/json",
+            Accept: "application/vnd.github.v3+json",
+          },
+          body: JSON.stringify({
+            ref: "main",
+            inputs: {
+              target_url: targetUrl,
+              tests: tests,
+            },
+          }),
         }
-        return parseResult.data;
+      );
+
+      if (!response.ok) {
+        const error = await response.text();
+        console.error("Workflow trigger failed:", response.status, error);
+        throw new Error(`Failed to trigger workflow: ${response.status}`);
       }
 
-      const parseResult = await parseArtifactJsonMutation.mutateAsync({
-        base64Data: downloadResult.data,
-        fileName,
-      });
+      console.log("Workflow triggered successfully");
 
-      if (!parseResult.success) {
-        console.error(`Failed to parse ${artifactName}:`, parseResult.error);
-        return null;
+      // STEP 1: Polling으로 run_id 확보 (1~2초 후 시작)
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      for (let i = 0; i < 10; i++) {
+        const runsResponse = await fetch(
+          `https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/qa-tests.yml/runs`,
+          {
+            headers: {
+              Authorization: `token ${GITHUB_TOKEN}`,
+              Accept: "application/vnd.github.v3+json",
+            },
+          }
+        );
+
+        const runsData = await runsResponse.json();
+        const myRun = runsData.workflow_runs?.find(
+          (r: any) =>
+            (r.status === "in_progress" || r.status === "queued") &&
+            r.inputs?.target_url === targetUrl &&
+            r.inputs?.tests === tests
+        );
+
+        if (myRun) {
+          console.log("Found run ID:", myRun.id);
+          return myRun.id;
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 200));
       }
 
-      return parseResult.data;
+      throw new Error("Could not find workflow run");
     } catch (error) {
-      console.error(`Error processing ${artifactName}:`, error);
+      console.error("Trigger error:", error);
+      throw error;
+    }
+  };
+
+  // ✅ STEP 2: run_id 기준으로 상태 조회
+  const checkRunStatus = async (id: number): Promise<{ status: string; conclusion: string | null }> => {
+    try {
+      const response = await fetch(
+        `https://api.github.com/repos/${GITHUB_REPO}/actions/runs/${id}`,
+        {
+          headers: {
+            Authorization: `token ${GITHUB_TOKEN}`,
+            Accept: "application/vnd.github.v3+json",
+          },
+        }
+      );
+
+      if (!response.ok) throw new Error("Failed to fetch run status");
+
+      const data = await response.json();
+      console.log("Run status:", data.status, "Conclusion:", data.conclusion);
+      return { status: data.status, conclusion: data.conclusion };
+    } catch (error) {
+      console.error("Error checking status:", error);
+      return { status: "unknown", conclusion: null };
+    }
+  };
+
+  // ✅ STEP 2 + STEP 3: run_id 기준으로 artifacts 조회 및 artifact_id로 다운로드
+  const getArtifactsByRunId = async (runId: number): Promise<any[]> => {
+    try {
+      const response = await fetch(
+        `https://api.github.com/repos/${GITHUB_REPO}/actions/runs/${runId}/artifacts`,
+        {
+          headers: {
+            Authorization: `token ${GITHUB_TOKEN}`,
+            Accept: "application/vnd.github.v3+json",
+          },
+        }
+      );
+
+      if (!response.ok) throw new Error("Failed to fetch artifacts");
+
+      const data = await response.json();
+      console.log("Artifacts found:", data.artifacts?.length || 0);
+      return data.artifacts || [];
+    } catch (error) {
+      console.error("Error fetching artifacts:", error);
+      return [];
+    }
+  };
+
+  // ✅ STEP 3: artifact_id로 직접 다운로드 (안정적)
+  const downloadArtifactById = async (artifactId: number): Promise<ArrayBuffer | null> => {
+    try {
+      const response = await fetch(
+        `https://api.github.com/repos/${GITHUB_REPO}/actions/artifacts/${artifactId}/zip`,
+        {
+          headers: {
+            Authorization: `token ${GITHUB_TOKEN}`,
+          },
+        }
+      );
+
+      if (!response.ok) throw new Error("Failed to download artifact");
+
+      return await response.arrayBuffer();
+    } catch (error) {
+      console.error("Error downloading artifact:", error);
       return null;
     }
   };
 
-  // 상태 폴링
+  // Lighthouse 결과 조회
+  const fetchLighthouseResults = async (runId: number): Promise<LighthouseScore | null> => {
+    try {
+      console.log("Fetching Lighthouse results for run:", runId);
+
+      const artifacts = await getArtifactsByRunId(runId);
+      const lighthouseArtifact = artifacts.find((a: any) => a.name === "lighthouse-report");
+
+      if (!lighthouseArtifact) {
+        console.warn("Lighthouse artifact not found");
+        return null;
+      }
+
+      console.log("Downloading Lighthouse artifact...");
+      const arrayBuffer = await downloadArtifactById(lighthouseArtifact.id);
+
+      if (!arrayBuffer) return null;
+
+      const zip = new JSZip();
+      await zip.loadAsync(arrayBuffer);
+
+      let jsonContent: any = null;
+
+      for (const [filename, file] of Object.entries(zip.files)) {
+        console.log("ZIP file entry:", filename);
+        if (filename.includes("lighthouse-report.json")) {
+          const content = await (file as any).async("text");
+          jsonContent = JSON.parse(content);
+          console.log("Parsed Lighthouse JSON:", jsonContent);
+          break;
+        }
+      }
+
+      if (!jsonContent) {
+        console.error("lighthouse-report.json not found in ZIP");
+        return null;
+      }
+
+      let lighthouseScores: LighthouseScore = {
+        performance: 0,
+        accessibility: 0,
+        "best-practices": 0,
+        seo: 0,
+      };
+
+      if (jsonContent.categories) {
+        const categories = jsonContent.categories;
+        lighthouseScores.performance = Math.round((categories.performance?.score || 0) * 100);
+        lighthouseScores.accessibility = Math.round((categories.accessibility?.score || 0) * 100);
+        lighthouseScores["best-practices"] = Math.round((categories["best-practices"]?.score || 0) * 100);
+        lighthouseScores.seo = Math.round((categories.seo?.score || 0) * 100);
+      } else if (jsonContent.scores) {
+        const scores = jsonContent.scores;
+        lighthouseScores.performance = Math.round((scores.performance || 0) * 100);
+        lighthouseScores.accessibility = Math.round((scores.accessibility || 0) * 100);
+        lighthouseScores["best-practices"] = Math.round((scores["best-practices"] || 0) * 100);
+        lighthouseScores.seo = Math.round((scores.seo || 0) * 100);
+      }
+
+      if (isNaN(lighthouseScores.performance)) lighthouseScores.performance = 0;
+      if (isNaN(lighthouseScores.accessibility)) lighthouseScores.accessibility = 0;
+      if (isNaN(lighthouseScores["best-practices"])) lighthouseScores["best-practices"] = 0;
+      if (isNaN(lighthouseScores.seo)) lighthouseScores.seo = 0;
+
+      console.log("Extracted scores:", lighthouseScores);
+      return lighthouseScores;
+    } catch (error) {
+      console.error("Error fetching Lighthouse results:", error);
+      return null;
+    }
+  };
+
+  // 스크린샷 조회
+  const fetchScreenshots = async (runId: number): Promise<ResponsiveScreenshots> => {
+    try {
+      console.log("Fetching screenshots for run:", runId);
+
+      const artifacts = await getArtifactsByRunId(runId);
+      const screenshotArtifact = artifacts.find((a: any) => a.name === "responsive-screenshots");
+
+      if (!screenshotArtifact) {
+        console.warn("Screenshot artifact not found");
+        return {};
+      }
+
+      console.log("Downloading screenshot artifact...");
+      const arrayBuffer = await downloadArtifactById(screenshotArtifact.id);
+
+      if (!arrayBuffer) return {};
+
+      const zip = new JSZip();
+      await zip.loadAsync(arrayBuffer);
+
+      const base64Screenshots: ResponsiveScreenshots = {};
+
+      for (const [filename, file] of Object.entries(zip.files)) {
+        console.log("Screenshot file:", filename);
+        if (filename.includes("desktop.png")) {
+          const arrayBuf = await (file as any).async("arraybuffer");
+          const uint8Array = new Uint8Array(arrayBuf);
+          let binaryString = "";
+          for (let i = 0; i < uint8Array.length; i++) {
+            binaryString += String.fromCharCode(uint8Array[i]);
+          }
+          base64Screenshots.desktop = "data:image/png;base64," + btoa(binaryString);
+        } else if (filename.includes("tablet.png")) {
+          const arrayBuf = await (file as any).async("arraybuffer");
+          const uint8Array = new Uint8Array(arrayBuf);
+          let binaryString = "";
+          for (let i = 0; i < uint8Array.length; i++) {
+            binaryString += String.fromCharCode(uint8Array[i]);
+          }
+          base64Screenshots.tablet = "data:image/png;base64," + btoa(binaryString);
+        } else if (filename.includes("mobile.png")) {
+          const arrayBuf = await (file as any).async("arraybuffer");
+          const uint8Array = new Uint8Array(arrayBuf);
+          let binaryString = "";
+          for (let i = 0; i < uint8Array.length; i++) {
+            binaryString += String.fromCharCode(uint8Array[i]);
+          }
+          base64Screenshots.mobile = "data:image/png;base64," + btoa(binaryString);
+        }
+      }
+
+      console.log("Extracted screenshots:", Object.keys(base64Screenshots));
+      setScreenshotBase64(base64Screenshots);
+      return base64Screenshots;
+    } catch (error) {
+      console.error("Error fetching screenshots:", error);
+      return {};
+    }
+  };
+
+  // AI UX 리뷰 조회
+  const fetchUXReview = async (runId: number): Promise<UXReview[]> => {
+    try {
+      console.log("Fetching UX review for run:", runId);
+
+      const artifacts = await getArtifactsByRunId(runId);
+      const uxArtifact = artifacts.find((a: any) => a.name === "ux-review");
+
+      if (!uxArtifact) {
+        console.warn("UX review artifact not found");
+        return [];
+      }
+
+      console.log("Downloading UX review artifact...");
+      const arrayBuffer = await downloadArtifactById(uxArtifact.id);
+
+      if (!arrayBuffer) return [];
+
+      const zip = new JSZip();
+      await zip.loadAsync(arrayBuffer);
+
+      let jsonContent: any = null;
+      for (const [filename, file] of Object.entries(zip.files)) {
+        if (filename.includes("ux-review.json")) {
+          const content = await (file as any).async("text");
+          jsonContent = JSON.parse(content);
+          break;
+        }
+      }
+
+      if (!jsonContent) {
+        console.error("ux-review.json not found");
+        return [];
+      }
+
+      const reviews = jsonContent.reviews || [];
+      console.log("Extracted UX reviews:", reviews.length);
+      setUxReviews(reviews);
+      return reviews;
+    } catch (error) {
+      console.error("Error fetching UX review:", error);
+      return [];
+    }
+  };
+
+  // TC 결과 조회
+  const fetchTestCases = async (runId: number): Promise<{ testCases: TestCase[]; summary: any }> => {
+    try {
+      console.log("Fetching test cases for run:", runId);
+
+      const artifacts = await getArtifactsByRunId(runId);
+      const tcArtifact = artifacts.find((a: any) => a.name === "test-cases-report");
+
+      if (!tcArtifact) {
+        console.warn("Test cases artifact not found");
+        return { testCases: [], summary: null };
+      }
+
+      console.log("Downloading test cases artifact...");
+      const arrayBuffer = await downloadArtifactById(tcArtifact.id);
+
+      if (!arrayBuffer) return { testCases: [], summary: null };
+
+      const zip = new JSZip();
+      await zip.loadAsync(arrayBuffer);
+
+      let jsonContent: any = null;
+      for (const [filename, file] of Object.entries(zip.files)) {
+        if (filename.includes("tc-report.json")) {
+          const content = await (file as any).async("text");
+          jsonContent = JSON.parse(content);
+          break;
+        }
+      }
+
+      if (!jsonContent) {
+        console.error("tc-report.json not found");
+        return { testCases: [], summary: null };
+      }
+
+      const testCasesList = jsonContent.testCases || [];
+      const summary = jsonContent.summary || {};
+      console.log("Extracted test cases:", testCasesList.length);
+      setTestCases(testCasesList);
+      setTestSummary(summary);
+      return { testCases: testCasesList, summary };
+    } catch (error) {
+      console.error("Error fetching test cases:", error);
+      return { testCases: [], summary: null };
+    }
+  };
+
+  // ✅ STEP 4: 상태 머신 + 상태 폴링
   React.useEffect(() => {
-    if (!isLoading || !runId) return;
+    if (testState !== "RUNNING" || !runId) return;
 
     const pollInterval = setInterval(async () => {
       setPollCount((prev) => prev + 1);
-      try {
-        const statusResult = await checkRunStatusQuery.refetch();
-        const { status, conclusion } = statusResult.data || {};
+      const { status, conclusion } = await checkRunStatus(runId);
 
-        if (status === "completed") {
-          console.log("Run completed with conclusion:", conclusion);
-          clearInterval(pollInterval);
+      if (status === "completed") {
+        console.log("Run completed with conclusion:", conclusion);
+        clearInterval(pollInterval);
 
-          // 모든 결과 다운로드 및 파싱
-          const lighthouseData = selectedTests.includes("performance")
-            ? await downloadAndParseArtifact("lighthouse-report", "lighthouse-report.json")
-            : null;
+        if (conclusion === "success") {
+          setTestState("PARTIAL_DONE");
 
-          const screenshotData = selectedTests.includes("responsive")
-            ? await downloadAndParseArtifact("responsive-screenshots", ".png")
-            : null;
+          let lighthouseScores: LighthouseScore | undefined;
+          if (selectedTests.includes("performance")) {
+            const scores = await fetchLighthouseResults(runId);
+            lighthouseScores = scores || undefined;
+          }
 
-          const uxReviewData = selectedTests.includes("ux")
-            ? await downloadAndParseArtifact("ux-review", "ux-review.json")
-            : null;
+          let responsiveScreenshots: ResponsiveScreenshots = {};
+          if (selectedTests.includes("responsive")) {
+            responsiveScreenshots = await fetchScreenshots(runId);
+          }
 
-          const tcData = selectedTests.includes("tc")
-            ? await downloadAndParseArtifact("test-cases-report", "tc-report.json")
-            : null;
+          let uxReviewList: UXReview[] = [];
+          if (selectedTests.includes("ux")) {
+            uxReviewList = await fetchUXReview(runId);
+          }
 
-          // 결과 업데이트
+          let tcData: { testCases: TestCase[]; summary: any } = { testCases: [], summary: null };
+          if (selectedTests.includes("tc")) {
+            tcData = await fetchTestCases(runId);
+          }
+
           setResults(
             selectedTests.map((testId) => {
-              if (testId === "performance" && lighthouseData) {
-                const categories = lighthouseData.categories || {};
+              if (testId === "performance") {
                 return {
                   testId,
                   status: "completed",
-                  data: {
-                    performance: Math.round((categories.performance?.score || 0) * 100),
-                    accessibility: Math.round((categories.accessibility?.score || 0) * 100),
-                    "best-practices": Math.round((categories["best-practices"]?.score || 0) * 100),
-                    seo: Math.round((categories.seo?.score || 0) * 100),
-                  },
+                  data: lighthouseScores,
                 };
-              } else if (testId === "responsive" && screenshotData) {
+              } else if (testId === "responsive") {
                 return {
                   testId,
                   status: "completed",
-                  data: screenshotData,
+                  data: responsiveScreenshots,
                 };
-              } else if (testId === "ux" && uxReviewData) {
+              } else if (testId === "ux") {
                 return {
                   testId,
                   status: "completed",
-                  data: uxReviewData.reviews || [],
+                  data: uxReviewList,
                 };
-              } else if (testId === "tc" && tcData) {
+              } else if (testId === "tc") {
                 return {
                   testId,
                   status: "completed",
-                  data: {
-                    testCases: tcData.testCases || [],
-                    summary: tcData.summary || {},
-                  },
+                  data: tcData,
                 };
               } else {
                 return {
@@ -367,66 +686,56 @@ export default function Home() {
             })
           );
 
-          setIsLoading(false);
+          setTestState("COMPLETED");
           toast.success("실행 완료되었습니다.", {
             description: "테스트 결과를 아래에서 확인하세요.",
             duration: 3000,
           });
+        } else {
+          setTestState("FAILED");
+          toast.error("테스트 실행 실패", {
+            description: "GitHub Actions 로그를 확인하세요.",
+            duration: 3000,
+          });
         }
-      } catch (error) {
-        console.error("Polling error:", error);
       }
     }, 3000);
 
     return () => clearInterval(pollInterval);
-  }, [isLoading, runId, selectedTests, checkRunStatusQuery, downloadArtifactMutation, parseArtifactJsonMutation]);
+  }, [testState, runId, selectedTests]);
 
   const handleRunTests = async () => {
     if (!url.trim()) {
-      alert("URL을 입력해주세요");
+      toast.error("URL을 입력해주세요");
       return;
     }
 
     if (selectedTests.length === 0) {
-      alert("테스트를 선택해주세요");
+      toast.error("테스트를 선택해주세요");
       return;
     }
 
     const normalizedUrl = normalizeUrl(url);
     if (!validateUrl(normalizedUrl)) {
-      alert("유효한 URL을 입력해주세요");
+      toast.error("유효한 URL을 입력해주세요");
       return;
     }
 
-    setIsLoading(true);
+    setTestState("RUNNING");
     setResults(selectedTests.map((t) => ({ testId: t, status: "running" })));
     setPollCount(0);
 
     try {
-      // 워크플로우 트리거
-      await triggerWorkflowMutation.mutateAsync({
-        targetUrl: normalizedUrl,
-        tests: selectedTests.join(","),
-      });
-
-      // 최신 Run ID 조회
-      setTimeout(async () => {
-        try {
-          const latestRunResult = await getLatestRunQuery.refetch();
-          if (latestRunResult.data?.id) {
-            setRunId(latestRunResult.data.id);
-          } else {
-            setIsLoading(false);
-            alert("워크플로우 실행에 실패했습니다");
-          }
-        } catch (error) {
-          setIsLoading(false);
-          console.error("Latest run fetch error:", error);
-        }
-      }, 2000);
+      const id = await triggerWorkflow(normalizedUrl, selectedTests.join(","));
+      if (id) {
+        setRunId(id);
+      } else {
+        setTestState("FAILED");
+        toast.error("워크플로우 실행에 실패했습니다");
+      }
     } catch (error) {
-      setIsLoading(false);
-      alert("테스트 실행 중 오류가 발생했습니다: " + (error as Error).message);
+      setTestState("FAILED");
+      toast.error("테스트 실행 중 오류가 발생했습니다: " + (error as Error).message);
     }
   };
 
@@ -457,7 +766,7 @@ export default function Home() {
                   placeholder="https://example.com"
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
-                  disabled={isLoading}
+                  disabled={testState === "RUNNING"}
                 />
                 <p className="text-xs text-gray-500 mt-1">https:// 프로토콜 자동 추가됩니다</p>
               </div>
@@ -481,7 +790,7 @@ export default function Home() {
                             setSelectedTests(selectedTests.filter((t) => t !== id));
                           }
                         }}
-                        disabled={isLoading}
+                        disabled={testState === "RUNNING"}
                       />
                       <div>
                         <p className="text-sm font-medium text-gray-900">{label}</p>
@@ -494,11 +803,11 @@ export default function Home() {
 
               <Button
                 onClick={handleRunTests}
-                disabled={isLoading || selectedTests.length === 0}
+                disabled={testState === "RUNNING" || selectedTests.length === 0}
                 className="w-full"
                 size="lg"
               >
-                {isLoading ? (
+                {testState === "RUNNING" ? (
                   <>
                     <Clock className="w-4 h-4 mr-2 animate-spin" />
                     실행 중... ({pollCount}초)
@@ -570,17 +879,17 @@ export default function Home() {
                           <Clock className="w-5 h-5 animate-spin text-blue-600 mr-2" />
                           <span>스크린샷 캡처 중...</span>
                         </div>
-                      ) : results.find((r) => r.testId === "responsive")?.data ? (
+                      ) : screenshotBase64.desktop && screenshotBase64.tablet && screenshotBase64.mobile ? (
                         <Tabs defaultValue="desktop" className="w-full">
                           <TabsList className="grid w-full grid-cols-3">
-                            <TabsTrigger value="desktop">💻 데스크톱</TabsTrigger>
-                            <TabsTrigger value="tablet">📱 태블릿</TabsTrigger>
-                            <TabsTrigger value="mobile">📲 모바일</TabsTrigger>
+                            <TabsTrigger value="desktop">💻 데스크톱 (1920x1080)</TabsTrigger>
+                            <TabsTrigger value="tablet">📱 태블릿 (768x1024)</TabsTrigger>
+                            <TabsTrigger value="mobile">📲 모바일 (375x667)</TabsTrigger>
                           </TabsList>
                           <TabsContent value="desktop" className="mt-4">
-                            {results.find((r) => r.testId === "responsive")?.data?.desktop ? (
+                            {screenshotBase64.desktop ? (
                               <img
-                                src={results.find((r) => r.testId === "responsive")?.data?.desktop}
+                                src={screenshotBase64.desktop}
                                 alt="Desktop screenshot"
                                 className="w-full border rounded-lg"
                               />
@@ -589,9 +898,9 @@ export default function Home() {
                             )}
                           </TabsContent>
                           <TabsContent value="tablet" className="mt-4">
-                            {results.find((r) => r.testId === "responsive")?.data?.tablet ? (
+                            {screenshotBase64.tablet ? (
                               <img
-                                src={results.find((r) => r.testId === "responsive")?.data?.tablet}
+                                src={screenshotBase64.tablet}
                                 alt="Tablet screenshot"
                                 className="w-full border rounded-lg"
                               />
@@ -600,9 +909,9 @@ export default function Home() {
                             )}
                           </TabsContent>
                           <TabsContent value="mobile" className="mt-4">
-                            {results.find((r) => r.testId === "responsive")?.data?.mobile ? (
+                            {screenshotBase64.mobile ? (
                               <img
-                                src={results.find((r) => r.testId === "responsive")?.data?.mobile}
+                                src={screenshotBase64.mobile}
                                 alt="Mobile screenshot"
                                 className="w-full border rounded-lg"
                               />
@@ -635,9 +944,9 @@ export default function Home() {
                           <Clock className="w-5 h-5 animate-spin text-blue-600 mr-2" />
                           <span>UX 리뷰 분석 중...</span>
                         </div>
-                      ) : results.find((r) => r.testId === "ux")?.data && results.find((r) => r.testId === "ux")?.data.length > 0 ? (
+                      ) : uxReviews && uxReviews.length > 0 ? (
                         <div className="space-y-3">
-                          {results.find((r) => r.testId === "ux")?.data.map((review: UXReview, idx: number) => (
+                          {uxReviews.map((review, idx) => (
                             <div key={idx} className="border rounded-lg p-4 bg-gray-50">
                               <div className="flex items-start gap-3 mb-2">
                                 <span className={`px-3 py-1 rounded-full text-xs font-semibold ${getPriorityColor(review.priority)}`}>
@@ -685,11 +994,8 @@ export default function Home() {
                           <Clock className="w-5 h-5 animate-spin text-blue-600 mr-2" />
                           <span>테스트 케이스 실행 중...</span>
                         </div>
-                      ) : results.find((r) => r.testId === "tc")?.data?.testCases && results.find((r) => r.testId === "tc")?.data.testCases.length > 0 ? (
-                        <TestCaseTable 
-                          testCases={results.find((r) => r.testId === "tc")?.data.testCases}
-                          summary={results.find((r) => r.testId === "tc")?.data.summary}
-                        />
+                      ) : testCases.length > 0 && testSummary ? (
+                        <TestCaseTable testCases={testCases} summary={testSummary} />
                       ) : (
                         <div className="text-center py-8 text-gray-500">
                           <AlertCircle className="w-8 h-8 mx-auto mb-2 opacity-50" />
@@ -702,7 +1008,7 @@ export default function Home() {
               </>
             )}
 
-            {!isLoading && results.length === 0 && (
+            {testState === "IDLE" && results.length === 0 && (
               <Card className="border-dashed">
                 <CardContent className="flex flex-col items-center justify-center py-12">
                   <Zap className="w-12 h-12 text-gray-300 mb-4" />
