@@ -5,17 +5,23 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AlertCircle, CheckCircle2, Clock, Zap, ChevronDown, ChevronUp } from "lucide-react";
-import { toast } from "sonner";
 import JSZip from "jszip";
+import { toast } from "sonner";
 
 type TestType = "performance" | "responsive" | "ux" | "tc";
-type TestState = "IDLE" | "RUNNING" | "PARTIAL_DONE" | "COMPLETED" | "FAILED";
 
 interface LighthouseScore {
   performance: number;
   accessibility: number;
   "best-practices": number;
   seo: number;
+}
+
+interface TestResult {
+  testId: TestType;
+  status: "pending" | "running" | "completed" | "failed";
+  data?: any;
+  error?: string;
 }
 
 interface ResponsiveScreenshots {
@@ -39,13 +45,6 @@ interface TestCase {
   expectedResults: string;
   result: "Pass" | "Fail" | "Blocked" | "N/A";
   details?: string;
-}
-
-interface TestResult {
-  testId: TestType;
-  status: "pending" | "running" | "completed" | "failed";
-  data?: any;
-  error?: string;
 }
 
 const getScoreColor = (score: number) => {
@@ -73,9 +72,9 @@ const getResultColor = (result: string) => {
   return "bg-blue-100 text-blue-800";
 };
 
-// Lighthouse 점수 원형 차트
 const ScoreCircle = ({ score, label }: { score: number; label: string }) => {
   const validScore = isNaN(score) ? 0 : Math.min(100, Math.max(0, score));
+  
   const radius = 45;
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - (validScore / 100) * circumference;
@@ -116,7 +115,6 @@ const ScoreCircle = ({ score, label }: { score: number; label: string }) => {
   );
 };
 
-// TC 결과 테이블
 const TestCaseTable = ({ testCases, summary }: { testCases: TestCase[]; summary: any }) => {
   const [expandedRows, setExpandedRows] = React.useState<Set<string>>(new Set());
 
@@ -136,7 +134,6 @@ const TestCaseTable = ({ testCases, summary }: { testCases: TestCase[]; summary:
 
   return (
     <div className="space-y-4">
-      {/* 요약 테이블 */}
       <div className="bg-gray-50 rounded-lg p-4">
         <div className="grid grid-cols-4 gap-4 text-center">
           <div>
@@ -158,7 +155,6 @@ const TestCaseTable = ({ testCases, summary }: { testCases: TestCase[]; summary:
         </div>
       </div>
 
-      {/* 상세 테이블 */}
       <div className="overflow-x-auto">
         <table className="w-full text-sm border-collapse">
           <thead>
@@ -217,7 +213,7 @@ export default function Home() {
   const [url, setUrl] = React.useState("");
   const [selectedTests, setSelectedTests] = React.useState<TestType[]>([]);
   const [results, setResults] = React.useState<TestResult[]>([]);
-  const [testState, setTestState] = React.useState<TestState>("IDLE");
+  const [isLoading, setIsLoading] = React.useState(false);
   const [runId, setRunId] = React.useState<number | null>(null);
   const [pollCount, setPollCount] = React.useState(0);
   const [screenshots, setScreenshots] = React.useState<ResponsiveScreenshots>({});
@@ -233,7 +229,6 @@ export default function Home() {
     console.warn("VITE_GITHUB_TOKEN is not set");
   }
 
-  // URL 검증
   const validateUrl = (inputUrl: string): boolean => {
     try {
       const urlObj = new URL(inputUrl);
@@ -243,7 +238,6 @@ export default function Home() {
     }
   };
 
-  // URL 자동 보정
   const normalizeUrl = (inputUrl: string): string => {
     if (!inputUrl.startsWith("http://") && !inputUrl.startsWith("https://")) {
       return `https://${inputUrl}`;
@@ -251,7 +245,6 @@ export default function Home() {
     return inputUrl;
   };
 
-  // ✅ STEP 1: Workflow 실행 후 run_id 확보 (polling으로)
   const triggerWorkflow = async (targetUrl: string, tests: string): Promise<number | null> => {
     try {
       console.log("Triggering workflow with URL:", targetUrl, "Tests:", tests);
@@ -283,12 +276,13 @@ export default function Home() {
 
       console.log("Workflow triggered successfully");
 
-      // STEP 1: Polling으로 run_id 확보 (1~2초 후 시작)
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // GitHub API의 /runs 엔드포인트는 inputs를 반환하지 않으므로
+      // 단순히 가장 최신의 in_progress/queued run을 찾음
+      await new Promise(resolve => setTimeout(resolve, 1500));
       
-      for (let i = 0; i < 10; i++) {
+      for (let i = 0; i < 20; i++) {
         const runsResponse = await fetch(
-          `https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/qa-tests.yml/runs`,
+          `https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/qa-tests.yml/runs?per_page=10`,
           {
             headers: {
               Authorization: `token ${GITHUB_TOKEN}`,
@@ -297,35 +291,33 @@ export default function Home() {
           }
         );
 
+        if (!runsResponse.ok) {
+          console.error("Failed to fetch runs:", runsResponse.status);
+          await new Promise(resolve => setTimeout(resolve, 300));
+          continue;
+        }
+
         const runsData = await runsResponse.json();
         const myRun = runsData.workflow_runs?.find(
-          (r: any) => {
-            // inputs는 객체 또는 문자열로 올 수 있음
-            const runInputs = typeof r.inputs === 'string' ? JSON.parse(r.inputs) : r.inputs;
-            return (
-              (r.status === "in_progress" || r.status === "queued") &&
-              runInputs?.target_url === targetUrl &&
-              runInputs?.tests === tests
-            );
-          }
+          (r: any) => r.status === "in_progress" || r.status === "queued"
         );
 
         if (myRun) {
-          console.log("Found run ID:", myRun.id);
+          console.log("Found run ID:", myRun.id, "Status:", myRun.status);
           return myRun.id;
         }
 
-        await new Promise(resolve => setTimeout(resolve, 200));
+        console.log(`Polling attempt ${i + 1}: No in_progress/queued run found yet`);
+        await new Promise(resolve => setTimeout(resolve, 300));
       }
 
-      throw new Error("Could not find workflow run");
+      throw new Error("Could not find workflow run after 20 polling attempts");
     } catch (error) {
       console.error("Trigger error:", error);
       throw error;
     }
   };
 
-  // ✅ STEP 2: run_id 기준으로 상태 조회
   const checkRunStatus = async (id: number): Promise<{ status: string; conclusion: string | null }> => {
     try {
       const response = await fetch(
@@ -349,7 +341,6 @@ export default function Home() {
     }
   };
 
-  // ✅ STEP 2 + STEP 3: run_id 기준으로 artifacts 조회 및 artifact_id로 다운로드
   const getArtifactsByRunId = async (runId: number): Promise<any[]> => {
     try {
       const response = await fetch(
@@ -373,33 +364,31 @@ export default function Home() {
     }
   };
 
-  // ✅ STEP 3: artifact_id로 직접 다운로드 (안정적)
-  const downloadArtifactById = async (artifactId: number): Promise<ArrayBuffer | null> => {
+  const downloadArtifact = async (artifactId: number): Promise<ArrayBuffer> => {
     try {
       const response = await fetch(
         `https://api.github.com/repos/${GITHUB_REPO}/actions/artifacts/${artifactId}/zip`,
         {
           headers: {
             Authorization: `token ${GITHUB_TOKEN}`,
+            Accept: "application/vnd.github.v3+json",
           },
         }
       );
 
       if (!response.ok) throw new Error("Failed to download artifact");
-
       return await response.arrayBuffer();
     } catch (error) {
       console.error("Error downloading artifact:", error);
-      return null;
+      throw error;
     }
   };
 
-  // Lighthouse 결과 조회
-  const fetchLighthouseResults = async (runId: number): Promise<LighthouseScore | null> => {
+  const fetchLighthouseResults = async (id: number): Promise<LighthouseScore | null> => {
     try {
-      console.log("Fetching Lighthouse results for run:", runId);
+      console.log("Fetching Lighthouse results for run:", id);
 
-      const artifacts = await getArtifactsByRunId(runId);
+      const artifacts = await getArtifactsByRunId(id);
       const lighthouseArtifact = artifacts.find((a: any) => a.name === "lighthouse-report");
 
       if (!lighthouseArtifact) {
@@ -408,9 +397,7 @@ export default function Home() {
       }
 
       console.log("Downloading Lighthouse artifact...");
-      const arrayBuffer = await downloadArtifactById(lighthouseArtifact.id);
-
-      if (!arrayBuffer) return null;
+      const arrayBuffer = await downloadArtifact(lighthouseArtifact.id);
 
       const zip = new JSZip();
       await zip.loadAsync(arrayBuffer);
@@ -466,12 +453,11 @@ export default function Home() {
     }
   };
 
-  // 스크린샷 조회
-  const fetchScreenshots = async (runId: number): Promise<ResponsiveScreenshots> => {
+  const fetchScreenshots = async (id: number): Promise<ResponsiveScreenshots> => {
     try {
-      console.log("Fetching screenshots for run:", runId);
+      console.log("Fetching screenshots for run:", id);
 
-      const artifacts = await getArtifactsByRunId(runId);
+      const artifacts = await getArtifactsByRunId(id);
       const screenshotArtifact = artifacts.find((a: any) => a.name === "responsive-screenshots");
 
       if (!screenshotArtifact) {
@@ -480,9 +466,7 @@ export default function Home() {
       }
 
       console.log("Downloading screenshot artifact...");
-      const arrayBuffer = await downloadArtifactById(screenshotArtifact.id);
-
-      if (!arrayBuffer) return {};
+      const arrayBuffer = await downloadArtifact(screenshotArtifact.id);
 
       const zip = new JSZip();
       await zip.loadAsync(arrayBuffer);
@@ -527,12 +511,11 @@ export default function Home() {
     }
   };
 
-  // AI UX 리뷰 조회
-  const fetchUXReview = async (runId: number): Promise<UXReview[]> => {
+  const fetchUXReview = async (id: number): Promise<UXReview[]> => {
     try {
-      console.log("Fetching UX review for run:", runId);
+      console.log("Fetching UX review for run:", id);
 
-      const artifacts = await getArtifactsByRunId(runId);
+      const artifacts = await getArtifactsByRunId(id);
       const uxArtifact = artifacts.find((a: any) => a.name === "ux-review");
 
       if (!uxArtifact) {
@@ -541,9 +524,7 @@ export default function Home() {
       }
 
       console.log("Downloading UX review artifact...");
-      const arrayBuffer = await downloadArtifactById(uxArtifact.id);
-
-      if (!arrayBuffer) return [];
+      const arrayBuffer = await downloadArtifact(uxArtifact.id);
 
       const zip = new JSZip();
       await zip.loadAsync(arrayBuffer);
@@ -572,12 +553,11 @@ export default function Home() {
     }
   };
 
-  // TC 결과 조회
-  const fetchTestCases = async (runId: number): Promise<{ testCases: TestCase[]; summary: any }> => {
+  const fetchTestCases = async (id: number): Promise<{ testCases: TestCase[]; summary: any }> => {
     try {
-      console.log("Fetching test cases for run:", runId);
+      console.log("Fetching test cases for run:", id);
 
-      const artifacts = await getArtifactsByRunId(runId);
+      const artifacts = await getArtifactsByRunId(id);
       const tcArtifact = artifacts.find((a: any) => a.name === "test-cases-report");
 
       if (!tcArtifact) {
@@ -586,9 +566,7 @@ export default function Home() {
       }
 
       console.log("Downloading test cases artifact...");
-      const arrayBuffer = await downloadArtifactById(tcArtifact.id);
-
-      if (!arrayBuffer) return { testCases: [], summary: null };
+      const arrayBuffer = await downloadArtifact(tcArtifact.id);
 
       const zip = new JSZip();
       await zip.loadAsync(arrayBuffer);
@@ -619,9 +597,8 @@ export default function Home() {
     }
   };
 
-  // ✅ STEP 4: 상태 머신 + 상태 폴링
   React.useEffect(() => {
-    if (testState !== "RUNNING" || !runId) return;
+    if (!isLoading || !runId) return;
 
     const pollInterval = setInterval(async () => {
       setPollCount((prev) => prev + 1);
@@ -630,103 +607,93 @@ export default function Home() {
       if (status === "completed") {
         console.log("Run completed with conclusion:", conclusion);
         clearInterval(pollInterval);
+        setIsLoading(false);
 
-        if (conclusion === "success") {
-          setTestState("PARTIAL_DONE");
-
-          let lighthouseScores: LighthouseScore | undefined;
-          if (selectedTests.includes("performance")) {
-            const scores = await fetchLighthouseResults(runId);
-            lighthouseScores = scores || undefined;
-          }
-
-          let responsiveScreenshots: ResponsiveScreenshots = {};
-          if (selectedTests.includes("responsive")) {
-            responsiveScreenshots = await fetchScreenshots(runId);
-          }
-
-          let uxReviewList: UXReview[] = [];
-          if (selectedTests.includes("ux")) {
-            uxReviewList = await fetchUXReview(runId);
-          }
-
-          let tcData: { testCases: TestCase[]; summary: any } = { testCases: [], summary: null };
-          if (selectedTests.includes("tc")) {
-            tcData = await fetchTestCases(runId);
-          }
-
-          setResults(
-            selectedTests.map((testId) => {
-              if (testId === "performance") {
-                return {
-                  testId,
-                  status: "completed",
-                  data: lighthouseScores,
-                };
-              } else if (testId === "responsive") {
-                return {
-                  testId,
-                  status: "completed",
-                  data: responsiveScreenshots,
-                };
-              } else if (testId === "ux") {
-                return {
-                  testId,
-                  status: "completed",
-                  data: uxReviewList,
-                };
-              } else if (testId === "tc") {
-                return {
-                  testId,
-                  status: "completed",
-                  data: tcData,
-                };
-              } else {
-                return {
-                  testId,
-                  status: "completed",
-                  data: {},
-                };
-              }
-            })
-          );
-
-          setTestState("COMPLETED");
-          toast.success("실행 완료되었습니다.", {
-            description: "테스트 결과를 아래에서 확인하세요.",
-            duration: 3000,
-          });
-        } else {
-          setTestState("FAILED");
-          toast.error("테스트 실행 실패", {
-            description: "GitHub Actions 로그를 확인하세요.",
-            duration: 3000,
-          });
+        let lighthouseScores: LighthouseScore | undefined;
+        if (selectedTests.includes("performance")) {
+          const scores = await fetchLighthouseResults(runId);
+          lighthouseScores = scores || undefined;
         }
+
+        let responsiveScreenshots: ResponsiveScreenshots = {};
+        if (selectedTests.includes("responsive")) {
+          responsiveScreenshots = await fetchScreenshots(runId);
+        }
+
+        let uxReviewList: UXReview[] = [];
+        if (selectedTests.includes("ux")) {
+          uxReviewList = await fetchUXReview(runId);
+        }
+
+        let tcData: { testCases: TestCase[]; summary: any } = { testCases: [], summary: null };
+        if (selectedTests.includes("tc")) {
+          tcData = await fetchTestCases(runId);
+        }
+
+        setResults(
+          selectedTests.map((testId) => {
+            if (testId === "performance") {
+              return {
+                testId,
+                status: "completed",
+                data: lighthouseScores,
+              };
+            } else if (testId === "responsive") {
+              return {
+                testId,
+                status: "completed",
+                data: responsiveScreenshots,
+              };
+            } else if (testId === "ux") {
+              return {
+                testId,
+                status: "completed",
+                data: uxReviewList,
+              };
+            } else if (testId === "tc") {
+              return {
+                testId,
+                status: "completed",
+                data: tcData,
+              };
+            } else {
+              return {
+                testId,
+                status: "completed",
+                data: {},
+              };
+            }
+          })
+        );
+        
+        toast.success("실행 완료되었습니다.", {
+          description: "테스트 결과를 아래에서 확인하세요.",
+          duration: 3000,
+        });
       }
     }, 3000);
 
     return () => clearInterval(pollInterval);
-  }, [testState, runId, selectedTests]);
+  }, [isLoading, runId, selectedTests]);
 
   const handleRunTests = async () => {
     if (!url.trim()) {
-      toast.error("URL을 입력해주세요");
+      alert("URL을 입력해주세요");
       return;
     }
 
     if (selectedTests.length === 0) {
-      toast.error("테스트를 선택해주세요");
+      alert("테스트를 선택해주세요");
       return;
     }
 
     const normalizedUrl = normalizeUrl(url);
     if (!validateUrl(normalizedUrl)) {
-      toast.error("유효한 URL을 입력해주세요");
+      alert("유효한 URL을 입력해주세요");
       return;
     }
 
-    setTestState("RUNNING");
+    setIsLoading(true);
     setResults(selectedTests.map((t) => ({ testId: t, status: "running" })));
     setPollCount(0);
 
@@ -735,12 +702,12 @@ export default function Home() {
       if (id) {
         setRunId(id);
       } else {
-        setTestState("FAILED");
-        toast.error("워크플로우 실행에 실패했습니다");
+        setIsLoading(false);
+        alert("워크플로우 실행에 실패했습니다");
       }
     } catch (error) {
-      setTestState("FAILED");
-      toast.error("테스트 실행 중 오류가 발생했습니다: " + (error as Error).message);
+      setIsLoading(false);
+      alert("테스트 실행 중 오류가 발생했습니다: " + (error as Error).message);
     }
   };
 
@@ -771,7 +738,7 @@ export default function Home() {
                   placeholder="https://example.com"
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
-                  disabled={testState === "RUNNING"}
+                  disabled={isLoading}
                 />
                 <p className="text-xs text-gray-500 mt-1">https:// 프로토콜 자동 추가됩니다</p>
               </div>
@@ -795,7 +762,7 @@ export default function Home() {
                             setSelectedTests(selectedTests.filter((t) => t !== id));
                           }
                         }}
-                        disabled={testState === "RUNNING"}
+                        disabled={isLoading}
                       />
                       <div>
                         <p className="text-sm font-medium text-gray-900">{label}</p>
@@ -808,11 +775,11 @@ export default function Home() {
 
               <Button
                 onClick={handleRunTests}
-                disabled={testState === "RUNNING" || selectedTests.length === 0}
+                disabled={isLoading || selectedTests.length === 0}
                 className="w-full"
                 size="lg"
               >
-                {testState === "RUNNING" ? (
+                {isLoading ? (
                   <>
                     <Clock className="w-4 h-4 mr-2 animate-spin" />
                     실행 중... ({pollCount}초)
@@ -1013,7 +980,7 @@ export default function Home() {
               </>
             )}
 
-            {testState === "IDLE" && results.length === 0 && (
+            {!isLoading && results.length === 0 && (
               <Card className="border-dashed">
                 <CardContent className="flex flex-col items-center justify-center py-12">
                   <Zap className="w-12 h-12 text-gray-300 mb-4" />
