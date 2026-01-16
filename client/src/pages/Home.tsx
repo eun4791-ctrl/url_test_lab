@@ -249,6 +249,11 @@ export default function Home() {
     try {
       console.log("Triggering workflow with URL:", targetUrl, "Tests:", tests);
 
+      // workflow_dispatch 호출 직전 시간 기록 (UTC)
+      const dispatchTime = new Date();
+      const dispatchTimeStr = dispatchTime.toISOString();
+      console.log("Dispatch time:", dispatchTimeStr);
+
       const response = await fetch(
         `https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/qa-tests.yml/dispatches`,
         {
@@ -276,13 +281,13 @@ export default function Home() {
 
       console.log("Workflow triggered successfully");
 
-      // GitHub API의 /runs 엔드포인트는 inputs를 반환하지 않으므로
-      // 단순히 가장 최신의 in_progress/queued run을 찾음
+      // dispatch 이후에 생성된 run을 찾기 위해 timestamp 비교
+      // 1.5초 대기 후 polling 시작
       await new Promise(resolve => setTimeout(resolve, 1500));
       
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < 25; i++) {
         const runsResponse = await fetch(
-          `https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/qa-tests.yml/runs?per_page=10`,
+          `https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/qa-tests.yml/runs?per_page=15`,
           {
             headers: {
               Authorization: `token ${GITHUB_TOKEN}`,
@@ -298,20 +303,29 @@ export default function Home() {
         }
 
         const runsData = await runsResponse.json();
+        
+        // dispatch 시간 이후에 생성되고, in_progress 또는 queued 상태인 run 찾기
         const myRun = runsData.workflow_runs?.find(
-          (r: any) => r.status === "in_progress" || r.status === "queued"
+          (r: any) => {
+            const runCreatedTime = new Date(r.created_at).getTime();
+            const dispatchTimeMs = dispatchTime.getTime();
+            return (
+              runCreatedTime >= dispatchTimeMs - 1000 && // 1초 오차 허용
+              (r.status === "in_progress" || r.status === "queued")
+            );
+          }
         );
 
         if (myRun) {
-          console.log("Found run ID:", myRun.id, "Status:", myRun.status);
+          console.log("Found run ID:", myRun.id, "Status:", myRun.status, "Created:", myRun.created_at);
           return myRun.id;
         }
 
-        console.log(`Polling attempt ${i + 1}: No in_progress/queued run found yet`);
+        console.log(`Polling attempt ${i + 1}: No matching run found yet`);
         await new Promise(resolve => setTimeout(resolve, 300));
       }
 
-      throw new Error("Could not find workflow run after 20 polling attempts");
+      throw new Error("Could not find workflow run after 25 polling attempts");
     } catch (error) {
       console.error("Trigger error:", error);
       throw error;
