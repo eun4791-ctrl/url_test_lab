@@ -157,7 +157,7 @@ EOF
 
           fs.writeFileSync('../reports/tc-report.json', JSON.stringify(result, null, 2));
           await browser.close();
-          EOF
+EOF
 
           cd qa-temp && node test.mjs
 
