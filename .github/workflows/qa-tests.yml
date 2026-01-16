@@ -114,10 +114,11 @@ jobs:
       - name: UX Review
         if: contains(github.event.inputs.tests, 'ux')
         run: |
-          cat << 'EOF' > reports/ux-review.json
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
+          cat << EOF > reports/ux-review.json
           {
             "url": "${{ github.event.inputs.target_url }}",
-            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")",
+            "timestamp": "$TIMESTAMP",
             "reviews": [
               {
                 "priority": "상",
@@ -128,7 +129,7 @@ jobs:
             ],
             "score": 7.3
           }
-          EOF
+EOF
 
       # ==================================================
       # Test Cases
