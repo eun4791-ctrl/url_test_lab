@@ -299,10 +299,15 @@ export default function Home() {
 
         const runsData = await runsResponse.json();
         const myRun = runsData.workflow_runs?.find(
-          (r: any) =>
-            (r.status === "in_progress" || r.status === "queued") &&
-            r.inputs?.target_url === targetUrl &&
-            r.inputs?.tests === tests
+          (r: any) => {
+            // inputs는 객체 또는 문자열로 올 수 있음
+            const runInputs = typeof r.inputs === 'string' ? JSON.parse(r.inputs) : r.inputs;
+            return (
+              (r.status === "in_progress" || r.status === "queued") &&
+              runInputs?.target_url === targetUrl &&
+              runInputs?.tests === tests
+            );
+          }
         );
 
         if (myRun) {
