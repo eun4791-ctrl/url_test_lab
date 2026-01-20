@@ -134,7 +134,8 @@ jobs:
           const context = await browser.newContext({
             recordVideo: {
               dir: videoDir,
-              size: { width: 1280, height: 720 }
+              size: { width: 1280, height: 720 },
+              fileName: 'test-video.webm'
             }
           });
           const page = await context.newPage();
