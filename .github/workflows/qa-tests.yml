@@ -86,7 +86,7 @@ jobs:
           ]) {
             await page.setViewportSize({ width: w, height: h });
             await page.waitForTimeout(500);
-            await page.screenshot({ path: `${out}/${name}.png` });
+            await page.screenshot({ path: `${out}/${name}.png`, timeout: 60000 });
           }
 
           await browser.close();
