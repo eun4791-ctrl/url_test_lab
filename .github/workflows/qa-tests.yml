@@ -350,6 +350,8 @@ jobs:
           fs.writeFileSync(
             '../reports/tc-report.json',
             JSON.stringify({
+              url: '${{ github.event.inputs.target_url }}',
+              timestamp: new Date().toISOString(),
               summary: {
                 total: rows.length,
                 pass,
