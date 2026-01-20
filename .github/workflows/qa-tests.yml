@@ -77,7 +77,7 @@ jobs:
           const page = await browser.newPage();
 
           await page.goto(url, { waitUntil: 'domcontentloaded' });
-          await page.waitForTimeout(1500);
+          await page.waitForTimeout(5000);
 
           for (const [name, w, h] of [
             ['desktop', 1920, 1080],
