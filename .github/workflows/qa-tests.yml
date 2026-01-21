@@ -128,10 +128,9 @@ jobs:
           import fs from 'fs';
           import path from 'path';
 
+          const TARGET_URL = '${{ github.event.inputs.target_url }}';
           const videoDir = '../videos';
           fs.mkdirSync(videoDir, { recursive: true });
-
-          const TARGET_URL = '${{ github.event.inputs.target_url }}';
 
           /* ================= 브라우저 / 컨텍스트 ================= */
           const browser = await chromium.launch({ headless: true });
@@ -142,6 +141,9 @@ jobs:
               size: { width: 1280, height: 720 }
             }
           });
+
+          /* 🔴 page는 단 1개만 생성 */
+          const page = await context.newPage();
 
           /* ================= 결과 집계 ================= */
           const rows = [];
@@ -168,20 +170,24 @@ jobs:
           };
 
           /**
-           * TC 단위 page 실행
-           * - context 유지
-           * - page는 TC마다 새로 생성
-           * - video 하나로 이어짐
+           * 🔑 TC 실행 단위
+           * - page 유지
+           * - 매 TC마다 reset
+           * - video 끊기지 않음
            */
-          const runWithNewPage = async (runner) => {
-            const page = await context.newPage();
+          const runTC = async (runner) => {
+            // 페이지 이동 = UI 상태 리셋
             await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded' });
+            await page.waitForTimeout(500); // video 안정화
 
-            try {
-              await runner(page);
-            } finally {
-              await page.close();
-            }
+            // 스토리지 리셋 (선택이지만 추천)
+            await context.clearCookies();
+            await page.addInitScript(() => {
+              localStorage.clear();
+              sessionStorage.clear();
+            });
+
+            await runner(page);
           };
 
           /* ================= TC-001 페이지 로드 ================= */
@@ -194,7 +200,7 @@ jobs:
             result: 'Pass',
             log: 'Loaded'
           }, async () => {
-            await runWithNewPage(async (page) => {
+            await runTC(async () => {
               await page.waitForTimeout(1000);
             });
           });
@@ -209,7 +215,7 @@ jobs:
             result: 'Pass',
             log: 'Scrolled'
           }, async () => {
-            await runWithNewPage(async (page) => {
+            await runTC(async (page) => {
               await page.mouse.wheel(0, 1200);
               await page.waitForTimeout(800);
             });
@@ -225,7 +231,7 @@ jobs:
             result: 'N/A',
             log: ''
           }, async (tc) => {
-            await runWithNewPage(async (page) => {
+            await runTC(async (page) => {
               const links = page.locator('a[href]:visible');
               if (await links.count() === 0) return;
 
@@ -249,7 +255,7 @@ jobs:
             result: 'N/A',
             log: ''
           }, async (tc) => {
-            await runWithNewPage(async (page) => {
+            await runTC(async (page) => {
               const buttons = page.locator('button:visible:not([disabled])');
               if (await buttons.count() === 0) return;
 
@@ -272,7 +278,7 @@ jobs:
             result: 'N/A',
             log: ''
           }, async (tc) => {
-            await runWithNewPage(async (page) => {
+            await runTC(async (page) => {
               const inputs = page.locator(
                 'input:visible:not([disabled]):not([type="hidden"])'
               );
@@ -286,7 +292,7 @@ jobs:
             });
           });
 
-          /* ================= TC-006 이미지 존재 ================= */
+          /* ================= TC-006 이미지 ================= */
           await safeTC({
             id: 'TC-006',
             title: '이미지 표시',
@@ -296,7 +302,7 @@ jobs:
             result: 'N/A',
             log: ''
           }, async (tc) => {
-            await runWithNewPage(async (page) => {
+            await runTC(async (page) => {
               const images = page.locator('img:visible');
               if (await images.count() === 0) return;
 
@@ -315,7 +321,7 @@ jobs:
             result: 'N/A',
             log: ''
           }, async (tc) => {
-            await runWithNewPage(async (page) => {
+            await runTC(async (page) => {
               const h = page.locator('h1,h2,h3,h4,h5,h6');
               if (await h.count() === 0) return;
 
@@ -334,12 +340,13 @@ jobs:
             result: 'N/A',
             log: ''
           }, async (tc) => {
-            await runWithNewPage(async (page) => {
+            await runTC(async (page) => {
               const el = page.locator('a:visible, button:visible').first();
               if (await el.count() === 0) return;
 
               await el.hover();
               await page.waitForTimeout(500);
+
               tc.result = 'Pass';
               tc.log = 'Hovered';
             });
@@ -350,16 +357,17 @@ jobs:
             id: 'TC-009',
             title: '콘솔 에러',
             precondition: '페이지 로드',
-            testStep: '콘솔 로그 수집',
+            testStep: '콘솔 로그 확인',
             expectedResults: '에러 없음',
             result: 'Pass',
             log: ''
           }, async (tc) => {
-            await runWithNewPage(async (page) => {
+            await runTC(async (page) => {
               const errors = [];
               page.on('console', msg => {
                 if (msg.type() === 'error') errors.push(msg.text());
               });
+
               await page.waitForTimeout(500);
               if (errors.length > 0) {
                 tc.result = 'Fail';
@@ -379,7 +387,7 @@ jobs:
             log: 'Completed'
           }, async () => {});
 
-          // rows 배열을 testCases 형식으로 변환
+          /* ================= 리포트 ================= */
           const testCases = rows.map(row => ({
             id: row.id,
             title: row.title,
@@ -393,7 +401,7 @@ jobs:
           fs.writeFileSync(
             '../reports/tc-report.json',
             JSON.stringify({
-              url: '${{ github.event.inputs.target_url }}',
+              url: TARGET_URL,
               timestamp: new Date().toISOString(),
               testCases,
               summary: {
@@ -407,16 +415,18 @@ jobs:
             }, null, 2)
           );
 
+          /* ================= 종료 ================= */
+          await page.close();
           await context.close();
           await browser.close();
-          
-          // 비디오 파일명 정렬 및 첫 번째 파일을 test-video.webm으로 이름 변경
+
+          /* 비디오 파일명 정리 */
           const videoFiles = fs.readdirSync(videoDir).filter(f => f.endsWith('.webm')).sort();
           if (videoFiles.length > 0) {
-            const mainVideoPath = path.join(videoDir, videoFiles[0]);
-            const renamedPath = path.join(videoDir, 'test-video.webm');
-            fs.renameSync(mainVideoPath, renamedPath);
-            console.log('Renamed first video to test-video.webm');
+            fs.renameSync(
+              path.join(videoDir, videoFiles[0]),
+              path.join(videoDir, 'test-video.webm')
+            );
           }
           EOF
 
