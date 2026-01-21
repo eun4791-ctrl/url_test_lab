@@ -226,23 +226,7 @@ jobs:
           };
 
           /* ================= TC 실행 단위 ================= */
-          const runTC = async (tc, runner) => {
-            await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded' });
-            await page.waitForTimeout(400);
-
-            // 상태 초기화 (QA 기준 독립성)
-            await context.clearCookies();
-            await page.addInitScript(() => {
-              localStorage.clear();
-              sessionStorage.clear();
-            });
-
-            // 🎞️ TC 표시
-            await showTCOverlay(page, tc);
-            await page.waitForTimeout(700); // 영상에 보이도록 잠까 유지
-
-            await runner(page);
-          };
+          // runTC 함수는 제거됨 - 실행 로직이 메인 루프에 통합됨
 
           /* ===================== TC 정의 ===================== */
 
