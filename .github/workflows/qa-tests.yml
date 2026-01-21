@@ -480,11 +480,18 @@ jobs:
           await context.close();
           await browser.close();
 
-          /* 비디오 파일명 정리 */
-          const videoFiles = fs.readdirSync(videoDir).filter(f => f.endsWith('.webm')).sort();
+          /* 비디오 파일명 정리 - 용량 기준 가장 큰 파일 선택 */
+          const videoFiles = fs.readdirSync(videoDir)
+            .filter(f => f.endsWith('.webm'))
+            .map(f => ({
+              name: f,
+              size: fs.statSync(path.join(videoDir, f)).size
+            }))
+            .sort((a, b) => b.size - a.size);  // 용량 큰 순서
+          
           if (videoFiles.length > 0) {
             fs.renameSync(
-              path.join(videoDir, videoFiles[0]),
+              path.join(videoDir, videoFiles[0].name),
               path.join(videoDir, 'test-video.webm')
             );
           }
