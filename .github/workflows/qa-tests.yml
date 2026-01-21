@@ -142,7 +142,7 @@ jobs:
             }
           });
 
-          /* 🔴 page는 단 1개만 생성 */
+          /* 🔑 page는 1개만 */
           const page = await context.newPage();
 
           /* ================= 결과 집계 ================= */
@@ -158,7 +158,7 @@ jobs:
             else na++;
           };
 
-          /* ================= 공통 헬퍼 ================= */
+          /* ================= 공통 래퍼 ================= */
           const safeTC = async (tc, runner) => {
             try {
               await runner(tc);
@@ -169,28 +169,78 @@ jobs:
             record(tc);
           };
 
-          /**
-           * 🔑 TC 실행 단위
-           * - page 유지
-           * - 매 TC마다 reset
-           * - video 끊기지 않음
-           */
-          const runTC = async (runner) => {
-            // 페이지 이동 = UI 상태 리셋
-            await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded' });
-            await page.waitForTimeout(500); // video 안정화
+          /* ================= 🎞️ 시각화 유틸 ================= */
 
-            // 스토리지 리셋 (선택이지만 추천)
+          /** 1️⃣ TC 오버레이 */
+          const showTCOverlay = async (page, tc) => {
+            await page.evaluate(({ id, title }) => {
+              const old = document.getElementById('__qa_tc_overlay');
+              if (old) old.remove();
+
+              const overlay = document.createElement('div');
+              overlay.id = '__qa_tc_overlay';
+              overlay.innerHTML = `🔍 <b>${id}</b> | ${title}`;
+              Object.assign(overlay.style, {
+                position: 'fixed',
+                top: '16px',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                padding: '10px 18px',
+                background: 'rgba(0,0,0,0.75)',
+                color: '#fff',
+                fontSize: '16px',
+                fontWeight: '600',
+                zIndex: '999999',
+                borderRadius: '8px',
+                pointerEvents: 'none',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.3)'
+              });
+
+              document.body.appendChild(overlay);
+            }, { id: tc.id, title: tc.title });
+          };
+
+          /** 2️⃣ 액션 대상 하이라이트 */
+          const highlight = async (page, locator) => {
+            const el = await locator.elementHandle();
+            if (!el) return;
+
+            await page.evaluate(el => {
+              el.style.outline = '3px solid #ff3b3b';
+              el.style.outlineOffset = '2px';
+              el.style.backgroundColor = 'rgba(255,0,0,0.1)';
+            }, el);
+
+            await page.waitForTimeout(500);
+
+            await page.evaluate(el => {
+              el.style.outline = '';
+              el.style.backgroundColor = '';
+            }, el);
+          };
+
+          /* ================= TC 실행 단위 ================= */
+          const runTC = async (tc, runner) => {
+            await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded' });
+            await page.waitForTimeout(400);
+
+            // 상태 초기화 (QA 기준 독립성)
             await context.clearCookies();
             await page.addInitScript(() => {
               localStorage.clear();
               sessionStorage.clear();
             });
 
+            // 🎞️ TC 표시
+            await showTCOverlay(page, tc);
+            await page.waitForTimeout(700); // 영상에 보이도록 잠까 유지
+
             await runner(page);
           };
 
-          /* ================= TC-001 페이지 로드 ================= */
+          /* ===================== TC 시작 ===================== */
+
+          /* TC-001 페이지 로드 */
           await safeTC({
             id: 'TC-001',
             title: '페이지 로드',
@@ -199,13 +249,13 @@ jobs:
             expectedResults: '페이지 정상 표시됨',
             result: 'Pass',
             log: 'Loaded'
-          }, async () => {
-            await runTC(async () => {
+          }, async (tc) => {
+            await runTC(tc, async () => {
               await page.waitForTimeout(1000);
             });
           });
 
-          /* ================= TC-002 스크롤 ================= */
+          /* TC-002 스크롤 */
           await safeTC({
             id: 'TC-002',
             title: '스크롤 동작',
@@ -214,14 +264,14 @@ jobs:
             expectedResults: '스크롤 정상 동작됨',
             result: 'Pass',
             log: 'Scrolled'
-          }, async () => {
-            await runTC(async (page) => {
+          }, async (tc) => {
+            await runTC(tc, async (page) => {
               await page.mouse.wheel(0, 1200);
               await page.waitForTimeout(800);
             });
           });
 
-          /* ================= TC-003 링크 클릭 ================= */
+          /* TC-003 링크 클릭 */
           await safeTC({
             id: 'TC-003',
             title: '링크 클릭',
@@ -231,12 +281,13 @@ jobs:
             result: 'N/A',
             log: ''
           }, async (tc) => {
-            await runTC(async (page) => {
+            await runTC(tc, async (page) => {
               const links = page.locator('a[href]:visible');
               if (await links.count() === 0) return;
 
+              await highlight(page, links.first());
+
               const before = page.url();
-              await links.first().scrollIntoViewIfNeeded();
               await links.first().click({ force: true });
               await page.waitForTimeout(1000);
 
@@ -245,7 +296,7 @@ jobs:
             });
           });
 
-          /* ================= TC-004 버튼 클릭 ================= */
+          /* TC-004 버튼 클릭 */
           await safeTC({
             id: 'TC-004',
             title: '버튼 클릭',
@@ -255,11 +306,11 @@ jobs:
             result: 'N/A',
             log: ''
           }, async (tc) => {
-            await runTC(async (page) => {
+            await runTC(tc, async (page) => {
               const buttons = page.locator('button:visible:not([disabled])');
               if (await buttons.count() === 0) return;
 
-              await buttons.first().scrollIntoViewIfNeeded();
+              await highlight(page, buttons.first());
               await buttons.first().click({ force: true });
               await page.waitForTimeout(800);
 
@@ -268,7 +319,7 @@ jobs:
             });
           });
 
-          /* ================= TC-005 입력 필드 ================= */
+          /* TC-005 입력 필드 */
           await safeTC({
             id: 'TC-005',
             title: '입력 필드 입력',
@@ -278,12 +329,13 @@ jobs:
             result: 'N/A',
             log: ''
           }, async (tc) => {
-            await runTC(async (page) => {
+            await runTC(tc, async (page) => {
               const inputs = page.locator(
                 'input:visible:not([disabled]):not([type="hidden"])'
               );
               if (await inputs.count() === 0) return;
 
+              await highlight(page, inputs.first());
               await inputs.first().fill('QA Test');
               await page.waitForTimeout(500);
 
@@ -292,7 +344,7 @@ jobs:
             });
           });
 
-          /* ================= TC-006 이미지 ================= */
+          /* TC-006 이미지 */
           await safeTC({
             id: 'TC-006',
             title: '이미지 표시',
@@ -302,16 +354,17 @@ jobs:
             result: 'N/A',
             log: ''
           }, async (tc) => {
-            await runTC(async (page) => {
+            await runTC(tc, async (page) => {
               const images = page.locator('img:visible');
               if (await images.count() === 0) return;
 
+              await highlight(page, images.first());
               tc.result = 'Pass';
               tc.log = `Images: ${await images.count()}`;
             });
           });
 
-          /* ================= TC-007 헤딩 ================= */
+          /* TC-007 헤딩 */
           await safeTC({
             id: 'TC-007',
             title: '헤딩 요소',
@@ -321,16 +374,17 @@ jobs:
             result: 'N/A',
             log: ''
           }, async (tc) => {
-            await runTC(async (page) => {
+            await runTC(tc, async (page) => {
               const h = page.locator('h1,h2,h3,h4,h5,h6');
               if (await h.count() === 0) return;
 
+              await highlight(page, h.first());
               tc.result = 'Pass';
               tc.log = `Headings: ${await h.count()}`;
             });
           });
 
-          /* ================= TC-008 Hover ================= */
+          /* TC-008 Hover */
           await safeTC({
             id: 'TC-008',
             title: 'Hover 반응',
@@ -340,10 +394,11 @@ jobs:
             result: 'N/A',
             log: ''
           }, async (tc) => {
-            await runTC(async (page) => {
+            await runTC(tc, async (page) => {
               const el = page.locator('a:visible, button:visible').first();
               if (await el.count() === 0) return;
 
+              await highlight(page, el);
               await el.hover();
               await page.waitForTimeout(500);
 
@@ -352,7 +407,7 @@ jobs:
             });
           });
 
-          /* ================= TC-009 콘솔 에러 ================= */
+          /* TC-009 콘솔 에러 */
           await safeTC({
             id: 'TC-009',
             title: '콘솔 에러',
@@ -362,7 +417,7 @@ jobs:
             result: 'Pass',
             log: ''
           }, async (tc) => {
-            await runTC(async (page) => {
+            await runTC(tc, async (page) => {
               const errors = [];
               page.on('console', msg => {
                 if (msg.type() === 'error') errors.push(msg.text());
@@ -376,7 +431,7 @@ jobs:
             });
           });
 
-          /* ================= TC-010 종료 ================= */
+          /* =================          /* TC-010 종료 */
           await safeTC({
             id: 'TC-010',
             title: '테스트 종료',
@@ -385,7 +440,7 @@ jobs:
             expectedResults: 'JSON 생성',
             result: 'Pass',
             log: 'Completed'
-          }, async () => {});
+          }, async () => {});> {});
 
           /* ================= 리포트 ================= */
           const testCases = rows.map(row => ({
