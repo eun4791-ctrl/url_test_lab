@@ -265,7 +265,7 @@ jobs:
             result: 'Pass',
             log: 'Scrolled'
           }, async (tc) => {
-            await runTC(tc, async (page) => {
+            await runTC(tc, async () => {
               await page.mouse.wheel(0, 1200);
               await page.waitForTimeout(800);
             });
@@ -281,7 +281,7 @@ jobs:
             result: 'N/A',
             log: ''
           }, async (tc) => {
-            await runTC(tc, async (page) => {
+            await runTC(tc, async () => {
               const links = page.locator('a[href]:visible');
               if (await links.count() === 0) return;
 
@@ -306,7 +306,7 @@ jobs:
             result: 'N/A',
             log: ''
           }, async (tc) => {
-            await runTC(tc, async (page) => {
+            await runTC(tc, async () => {
               const buttons = page.locator('button:visible:not([disabled])');
               if (await buttons.count() === 0) return;
 
@@ -329,7 +329,7 @@ jobs:
             result: 'N/A',
             log: ''
           }, async (tc) => {
-            await runTC(tc, async (page) => {
+            await runTC(tc, async () => {
               const inputs = page.locator(
                 'input:visible:not([disabled]):not([type="hidden"])'
               );
@@ -354,7 +354,7 @@ jobs:
             result: 'N/A',
             log: ''
           }, async (tc) => {
-            await runTC(tc, async (page) => {
+            await runTC(tc, async () => {
               const images = page.locator('img:visible');
               if (await images.count() === 0) return;
 
@@ -374,7 +374,7 @@ jobs:
             result: 'N/A',
             log: ''
           }, async (tc) => {
-            await runTC(tc, async (page) => {
+            await runTC(tc, async () => {
               const h = page.locator('h1,h2,h3,h4,h5,h6');
               if (await h.count() === 0) return;
 
@@ -394,7 +394,7 @@ jobs:
             result: 'N/A',
             log: ''
           }, async (tc) => {
-            await runTC(tc, async (page) => {
+            await runTC(tc, async () => {
               const el = page.locator('a:visible, button:visible').first();
               if (await el.count() === 0) return;
 
@@ -417,7 +417,7 @@ jobs:
             result: 'Pass',
             log: ''
           }, async (tc) => {
-            await runTC(tc, async (page) => {
+            await runTC(tc, async () => {
               const errors = [];
               page.on('console', msg => {
                 if (msg.type() === 'error') errors.push(msg.text());
