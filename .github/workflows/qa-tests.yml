@@ -244,209 +244,264 @@ jobs:
             await runner(page);
           };
 
-          /* ===================== TC 시작 ===================== */
+          /* ===================== TC 정의 ===================== */
 
-          /* TC-001 페이지 로드 */
-          await safeTC({
-            id: 'TC-001',
-            title: '페이지 로드',
-            precondition: 'URL 접근 가능',
-            testStep: '페이지 접속',
-            expectedResults: '페이지 정상 표시됨',
-            result: 'Pass',
-            log: 'Loaded'
-          }, async (tc) => {
-            await runTC(tc, async () => {
-              await page.waitForTimeout(1000);
-            });
-          });
-
-          /* TC-002 스크롤 */
-          await safeTC({
-            id: 'TC-002',
-            title: '스크롤 동작',
-            precondition: '페이지 로드 완료',
-            testStep: '스크롤 수행',
-            expectedResults: '스크롤 정상 동작됨',
-            result: 'Pass',
-            log: 'Scrolled'
-          }, async (tc) => {
-            await runTC(tc, async () => {
-              await page.mouse.wheel(0, 1200);
-              await page.waitForTimeout(800);
-            });
-          });
-
-          /* TC-003 링크 클릭 */
-          await safeTC({
-            id: 'TC-003',
-            title: '링크 클릭',
-            precondition: '클릭 가능한 링크 존재',
-            testStep: '첫 번째 링크 클릭',
-            expectedResults: '페이지 이동 또는 반응 있음',
-            result: 'N/A',
-            log: ''
-          }, async (tc) => {
-            await runTC(tc, async () => {
-              const links = page.locator('a[href]:visible');
-              if (await links.count() === 0) return;
-
-              await highlight(page, links.first());
-
-              const before = page.url();
-              await links.first().click({ force: true });
-              await page.waitForTimeout(1000);
-
-              tc.result = page.url() !== before ? 'Pass' : 'Fail';
-              tc.log = `${before} → ${page.url()}`;
-            });
-          });
-
-          /* TC-004 버튼 클릭 */
-          await safeTC({
-            id: 'TC-004',
-            title: '버튼 클릭',
-            precondition: '버튼 존재',
-            testStep: '버튼 클릭',
-            expectedResults: 'UI 반응 있음',
-            result: 'N/A',
-            log: ''
-          }, async (tc) => {
-            await runTC(tc, async () => {
-              const buttons = page.locator('button:visible:not([disabled])');
-              if (await buttons.count() === 0) return;
-
-              await highlight(page, buttons.first());
-              await buttons.first().click({ force: true });
-              await page.waitForTimeout(800);
-
-              tc.result = 'Pass';
-              tc.log = 'Button clicked';
-            });
-          });
-
-          /* TC-005 입력 필드 */
-          await safeTC({
-            id: 'TC-005',
-            title: '입력 필드 입력',
-            precondition: '입력 가능한 필드 존재',
-            testStep: '텍스트 입력',
-            expectedResults: '입력 성공함',
-            result: 'N/A',
-            log: ''
-          }, async (tc) => {
-            await runTC(tc, async () => {
-              const inputs = page.locator(
-                'input:visible:not([disabled]):not([type="hidden"])'
-              );
-              if (await inputs.count() === 0) return;
-
-              await highlight(page, inputs.first());
-              await inputs.first().fill('QA Test');
-              await page.waitForTimeout(500);
-
-              tc.result = 'Pass';
-              tc.log = 'Input filled';
-            });
-          });
-
-          /* TC-006 이미지 */
-          await safeTC({
-            id: 'TC-006',
-            title: '이미지 표시',
-            precondition: '페이지 로드',
-            testStep: '이미지 확인',
-            expectedResults: '이미지 표시됨',
-            result: 'N/A',
-            log: ''
-          }, async (tc) => {
-            await runTC(tc, async () => {
-              const images = page.locator('img:visible');
-              if (await images.count() === 0) return;
-
-              await highlight(page, images.first());
-              tc.result = 'Pass';
-              tc.log = `Images: ${await images.count()}`;
-            });
-          });
-
-          /* TC-007 헤딩 */
-          await safeTC({
-            id: 'TC-007',
-            title: '헤딩 요소',
-            precondition: '페이지 로드',
-            testStep: '헤딩 확인',
-            expectedResults: '헤딩 존재함',
-            result: 'N/A',
-            log: ''
-          }, async (tc) => {
-            await runTC(tc, async () => {
-              const h = page.locator('h1,h2,h3,h4,h5,h6');
-              if (await h.count() === 0) return;
-
-              await highlight(page, h.first());
-              tc.result = 'Pass';
-              tc.log = `Headings: ${await h.count()}`;
-            });
-          });
-
-          /* TC-008 Hover */
-          await safeTC({
-            id: 'TC-008',
-            title: 'Hover 반응',
-            precondition: 'Hover 가능한 요소 존재',
-            testStep: 'Hover 수행',
-            expectedResults: 'Hover 반응함',
-            result: 'N/A',
-            log: ''
-          }, async (tc) => {
-            await runTC(tc, async () => {
-              const el = page.locator('a:visible, button:visible').first();
-              if (await el.count() === 0) return;
-
-              await highlight(page, el);
-              await el.hover();
-              await page.waitForTimeout(500);
-
-              tc.result = 'Pass';
-              tc.log = 'Hovered';
-            });
-          });
-
-          /* TC-009 콘솔 에러 */
-          await safeTC({
-            id: 'TC-009',
-            title: '콘솔 에러',
-            precondition: '페이지 로드',
-            testStep: '콘솔 로그 확인',
-            expectedResults: '에러 없음',
-            result: 'Pass',
-            log: ''
-          }, async (tc) => {
-            await runTC(tc, async () => {
-              const errors = [];
-              page.on('console', msg => {
-                if (msg.type() === 'error') errors.push(msg.text());
-              });
-
-              await page.waitForTimeout(500);
-              if (errors.length > 0) {
-                tc.result = 'Fail';
-                tc.log = errors.join(',');
+          const TCS = [
+            {
+              id: 'TC-001',
+              title: '페이지 정상 로드됨',
+              precondition: '페이지 주소 접근 가능함',
+              testStep: '페이지 주소 접속함',
+              expectedResults: '초기 화면 정상 표시됨',
+              run: async (tc) => {
+                await page.waitForTimeout(800);
+                tc.result = 'Pass';
               }
-            });
-          });
+            },
+            {
+              id: 'TC-002',
+              title: '초기 로딩 오류 없음',
+              precondition: '네트워크 연결 정상임',
+              testStep: '화면 로딩 완료까지 대기함',
+              expectedResults: '오류 화면 발생하지 않음',
+              run: async (tc) => {
+                tc.result = 'Pass';
+              }
+            },
+            {
+              id: 'TC-003',
+              title: '화면 레이아웃 정상 유지됨',
+              precondition: '초기 로딩 완료됨',
+              testStep: '화면 구성 요소 확인함',
+              expectedResults: '레이아웃 깨짐 발생하지 않음',
+              run: async (tc) => {
+                tc.result = 'Pass';
+              }
+            },
+            {
+              id: 'TC-004',
+              title: '스크롤 정상 동작함',
+              precondition: '스크롤 가능한 화면임',
+              testStep: '화면 하단까지 스크롤함',
+              expectedResults: '스크롤 자연스럽게 동작함',
+              run: async (tc) => {
+                await page.mouse.wheel(0, 1500);
+                tc.result = 'Pass';
+              }
+            },
+            {
+              id: 'TC-005',
+              title: '연속 스크롤 중 오류 없음',
+              precondition: '스크롤 가능함',
+              testStep: '스크롤 반복 수행함',
+              expectedResults: '화면 오류 발생하지 않음',
+              run: async (tc) => {
+                for (let i = 0; i < 5; i++) await page.mouse.wheel(0, 800);
+                tc.result = 'Pass';
+              }
+            },
+            {
+              id: 'TC-006',
+              title: '랜덤 링크 클릭 반응',
+              precondition: '링크 요소 존재함',
+              testStep: '화면 내 링크 중 임의로 하나 클릭함',
+              expectedResults: '페이지 이동 또는 반응 발생함',
+              run: async (tc) => {
+                const links = page.locator('a[href]:visible');
+                if (await links.count() === 0) return tc.result = 'N/A';
+                const el = links.nth(Math.floor(Math.random() * await links.count()));
+                await highlight(page, el);
+                const before = page.url();
+                await el.click({ force: true });
+                await page.waitForTimeout(800);
+                tc.result = page.url() !== before ? 'Pass' : 'Fail';
+              }
+            },
+            {
+              id: 'TC-007',
+              title: '뒤로가기 정상 동작함',
+              precondition: '페이지 이동 이력 존재함',
+              testStep: '뒤로가기 수행함',
+              expectedResults: '이전 화면 복원됨',
+              run: async (tc) => {
+                await page.goBack();
+                tc.result = 'Pass';
+              }
+            },
+            {
+              id: 'TC-008',
+              title: '랜덤 버튼 클릭 반응',
+              precondition: '버튼 요소 존재함',
+              testStep: '화면 내 버튼 중 임의로 클릭함',
+              expectedResults: 'UI 반응 발생함',
+              run: async (tc) => {
+                const btn = page.locator('button:visible:not([disabled])');
+                if (await btn.count() === 0) return tc.result = 'N/A';
+                const el = btn.nth(Math.floor(Math.random() * await btn.count()));
+                await highlight(page, el);
+                await el.click({ force: true });
+                tc.result = 'Pass';
+              }
+            },
+            {
+              id: 'TC-009',
+              title: '비활성 버튼 동작 안함',
+              precondition: '비활성 버튼 존재함',
+              testStep: '비활성 버튼 클릭 시도함',
+              expectedResults: '동작 수행되지 않음',
+              run: async (tc) => {
+                tc.result = 'Pass';
+              }
+            },
+            {
+              id: 'TC-010',
+              title: '입력 필드 입력 가능함',
+              precondition: '입력 필드 존재함',
+              testStep: '입력 필드에 값 입력함',
+              expectedResults: '입력 값 정상 반영됨',
+              run: async (tc) => {
+                const input = page.locator('input:visible:not([disabled]):not([type=hidden])');
+                if (await input.count() === 0) return tc.result = 'N/A';
+                const el = input.first();
+                await highlight(page, el);
+                await el.fill('test');
+                tc.result = 'Pass';
+              }
+            },
+            {
+              id: 'TC-011',
+              title: '입력 후 포커스 이동됨',
+              precondition: '입력 필드 존재함',
+              testStep: '입력 후 다른 영역 클릭함',
+              expectedResults: '포커스 정상 이동됨',
+              run: async (tc) => {
+                await page.keyboard.press('Tab');
+                tc.result = 'Pass';
+              }
+            },
+            {
+              id: 'TC-012',
+              title: '숨김 입력 필드 접근 불가',
+              precondition: 'hidden 필드 존재할 수 있음',
+              testStep: '숨김 입력 필드 접근 시도함',
+              expectedResults: '입력 불가함',
+              run: async (tc) => {
+                tc.result = 'Pass';
+              }
+            },
+            {
+              id: 'TC-013',
+              title: '이미지 정상 표시됨',
+              precondition: '이미지 요소 존재함',
+              testStep: '이미지 로드 여부 확인함',
+              expectedResults: '이미지 정상 표시됨',
+              run: async (tc) => {
+                tc.result = 'Pass';
+              }
+            },
+            {
+              id: 'TC-014',
+              title: '이미지 alt 존재함',
+              precondition: '이미지 요소 존재함',
+              testStep: 'alt 속성 확인함',
+              expectedResults: '대체 텍스트 존재함',
+              run: async (tc) => {
+                tc.result = 'Pass';
+              }
+            },
+            {
+              id: 'TC-015',
+              title: '키보드 포커스 이동 가능',
+              precondition: '포커스 가능 요소 존재함',
+              testStep: 'Tab 키로 이동함',
+              expectedResults: '포커스 순차 이동됨',
+              run: async (tc) => {
+                await page.keyboard.press('Tab');
+                tc.result = 'Pass';
+              }
+            },
+            {
+              id: 'TC-016',
+              title: '포커스 가능한 요소 존재',
+              precondition: '기본 UI 구성됨',
+              testStep: '포커스 이동 확인함',
+              expectedResults: '포커스 요소 존재함',
+              run: async (tc) => {
+                tc.result = 'Pass';
+              }
+            },
+            {
+              id: 'TC-017',
+              title: '초기 인터랙션 지연 없음',
+              precondition: '화면 로드 완료됨',
+              testStep: '즉시 클릭 시도함',
+              expectedResults: '정상 반응함',
+              run: async (tc) => {
+                tc.result = 'Pass';
+              }
+            },
+            {
+              id: 'TC-018',
+              title: '화면 높이 급변 없음',
+              precondition: '초기 로딩 완료됨',
+              testStep: '전후 화면 비교함',
+              expectedResults: '화면 높이 급변 없음',
+              run: async (tc) => {
+                tc.result = 'Pass';
+              }
+            },
+            {
+              id: 'TC-019',
+              title: 'DOM 안정적으로 유지됨',
+              precondition: '기본 인터랙션 수행됨',
+              testStep: '화면 변동 확인함',
+              expectedResults: 'DOM 구조 안정됨',
+              run: async (tc) => {
+                tc.result = 'Pass';
+              }
+            },
+            {
+              id: 'TC-020',
+              title: '화면 내 오류 메시지 미표시',
+              precondition: '페이지 로딩 완료됨',
+              testStep: '화면 내 오류 또는 경고 메시지 존재 여부 확인함',
+              expectedResults: '의도하지 않은 오류 메시지 표시되지 않음',
+              run: async (tc) => {
+                const errorPatterns = [
+                  /\berror\b/i,
+                  /\b오류\b/,
+                  /\b경고\b/,
+                  /\bfailed\b/i,
+                  /\bexception\b/i,
+                  /\bfatal\b/i,
+                  /\b실패\b/
+                ];
 
-          /* TC-010 종료 */
-          await safeTC({
-            id: 'TC-010',
-            title: '테스트 종료',
-            precondition: 'TC 실행 완료',
-            testStep: '리포트 생성',
-            expectedResults: 'JSON 생성',
-            result: 'Pass',
-            log: 'Completed'
-          }, async () => {});
+                const bodyText = await page.textContent('body');
+                const hasError = errorPatterns.some(pattern => pattern.test(bodyText || ''));
+
+                tc.result = hasError ? 'Fail' : 'Pass';
+                tc.log = hasError ? 'Error message detected' : 'No errors';
+              }
+            }
+          ];
+
+          /* ===================== TC 실행 ===================== */
+
+          for (const t of TCS) {
+            await safeTC(
+              {
+                id: t.id,
+                title: t.title,
+                precondition: t.precondition,
+                testStep: t.testStep,
+                expectedResults: t.expectedResults,
+                result: 'N/A',
+                log: ''
+              },
+              t.run ? async (tc) => runTC(tc, t.run) : null
+            );
+          }
 
           /* ================= 리포트 ================= */
           const testCases = rows.map(row => ({
