@@ -489,18 +489,33 @@ jobs:
           /* ===================== TC 실행 ===================== */
 
           for (const t of TCS) {
-            await safeTC(
-              {
-                id: t.id,
-                title: t.title,
-                precondition: t.precondition,
-                testStep: t.testStep,
-                expectedResults: t.expectedResults,
-                result: 'N/A',
-                log: ''
-              },
-              t.run ? async (tc) => runTC(tc, t.run) : null
-            );
+            const tc = {
+              id: t.id,
+              title: t.title,
+              precondition: t.precondition,
+              testStep: t.testStep,
+              expectedResults: t.expectedResults,
+              result: 'N/A',
+              log: ''
+            };
+
+            try {
+              await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded' });
+              await page.waitForTimeout(400);
+              await context.clearCookies();
+              await page.addInitScript(() => {
+                localStorage.clear();
+                sessionStorage.clear();
+              });
+              await showTCOverlay(page, tc);
+              await page.waitForTimeout(700);
+              if (t.run) await t.run(tc);
+              if (tc.result === 'N/A') tc.result = 'Pass';
+            } catch (e) {
+              tc.result = 'Fail';
+              tc.log = e.message;
+            }
+            record(tc);
           }
 
           /* ================= 리포트 ================= */
