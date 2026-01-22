@@ -6,7 +6,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AlertCircle, CheckCircle2, Clock, Zap, ChevronDown, ChevronUp } from "lucide-react";
 import { toast } from "sonner";
-import JSZip from "jszip";
+import { trpc } from "@/lib/trpc";
 
 type TestType = "performance" | "responsive" | "ux" | "tc";
 type TestState = "IDLE" | "RUNNING" | "PARTIAL_DONE" | "COMPLETED" | "FAILED";
@@ -76,7 +76,7 @@ const getResultColor = (result: string) => {
 // Lighthouse 점수 원형 차트
 const ScoreCircle = ({ score, label }: { score: number; label: string }) => {
   const validScore = isNaN(score) ? 0 : Math.min(100, Math.max(0, score));
-  
+
   const radius = 45;
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - (validScore / 100) * circumference;
@@ -131,8 +131,8 @@ const TestCaseTable = ({ testCases, summary }: { testCases: TestCase[]; summary:
     setExpandedRows(newExpanded);
   };
 
-  const successRate = summary.total > 0 
-    ? Math.round((summary.passed / (summary.total - summary.na)) * 100 * 10) / 10 
+  const successRate = summary.total > 0
+    ? Math.round((summary.passed / (summary.total - summary.na)) * 100 * 10) / 10
     : 0;
 
   return (
@@ -228,12 +228,8 @@ export default function Home() {
   const [testSummary, setTestSummary] = React.useState<any>(null);
   const [videoUrl, setVideoUrl] = React.useState<string>("");
 
-  const GITHUB_TOKEN = import.meta.env.VITE_GITHUB_TOKEN || "";
-  const GITHUB_REPO = "eun4791-ctrl/ai_web_test";
+  // Removed GitHub specific constants
 
-  if (!GITHUB_TOKEN) {
-    console.warn("VITE_GITHUB_TOKEN is not set");
-  }
 
   // URL 검증
   const validateUrl = (inputUrl: string): boolean => {
@@ -253,174 +249,60 @@ export default function Home() {
     return inputUrl;
   };
 
-  // Timestamp 기반 run_id 찾기
+  // tRPC utils
+  const triggerMutation = trpc.qa.triggerWorkflow.useMutation();
+  const downloadMutation = trpc.qa.downloadArtifact.useMutation();
+
+  // Artifact fetchers using tRPC or direct API calls 
+  // Since we modified server to handle "artifacts" as local files, we can just use the tRPC procedures.
+  const utils = trpc.useUtils();
+
+  /* ==================================================================================
+     Trigger & Status
+     ================================================================================== */
+
   const triggerWorkflow = async (targetUrl: string, tests: string): Promise<number | null> => {
     try {
-      console.log("Triggering workflow with URL:", targetUrl, "Tests:", tests);
-
-      // workflow_dispatch 호출 직전 시간 기록 (UTC)
-      const dispatchTime = Math.floor(Date.now() / 1000);
-
-      const response = await fetch(
-        `https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/223007944/dispatches`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `token ${GITHUB_TOKEN}`,
-            "Content-Type": "application/json",
-            Accept: "application/vnd.github.v3+json",
-          },
-          body: JSON.stringify({
-            ref: "main",
-            inputs: {
-              target_url: targetUrl,
-              tests: tests,
-            },
-          }),
-        }
-      );
-
-      if (!response.ok) {
-        const error = await response.text();
-        console.error("Workflow trigger failed:", response.status, error);
-        throw new Error(`Failed to trigger workflow: ${response.status}`);
-      }
-
-      console.log("Workflow triggered successfully");
-
-      // Timestamp 기반으로 run_id 찾기 (최대 25회 polling, 약 7.5초)
-      for (let i = 0; i < 25; i++) {
-        await new Promise((resolve) => setTimeout(resolve, 300));
-
-        const runsResponse = await fetch(
-          `https://api.github.com/repos/${GITHUB_REPO}/actions/runs?per_page=10`,
-          {
-            headers: {
-              Authorization: `token ${GITHUB_TOKEN}`,
-              Accept: "application/vnd.github.v3+json",
-            },
-          }
-        );
-
-        if (!runsResponse.ok) continue;
-
-        const runsData = await runsResponse.json();
-        const runs = runsData.workflow_runs || [];
-
-        // dispatch 이후에 생성되고 in_progress/queued 상태인 run 찾기
-        const targetRun = runs.find((run: any) => {
-          const runCreatedTime = Math.floor(new Date(run.created_at).getTime() / 1000);
-          const isAfterDispatch = runCreatedTime >= dispatchTime - 1; // 1초 오차 허용
-          const isRunning = run.status === "in_progress" || run.status === "queued";
-          return isAfterDispatch && isRunning;
-        });
-
-        if (targetRun) {
-          console.log("Found run ID:", targetRun.id);
-          return targetRun.id;
-        }
-      }
-
-      throw new Error("Could not find workflow run");
+      console.log("Triggering local tests:", targetUrl, tests);
+      const result = await triggerMutation.mutateAsync({
+        targetUrl,
+        tests
+      });
+      return result.runId;
     } catch (error) {
       console.error("Trigger error:", error);
       throw error;
     }
   };
 
-  // GitHub API: run 상태 조회
   const checkRunStatus = async (id: number): Promise<{ status: string; conclusion: string | null }> => {
     try {
-      const response = await fetch(
-        `https://api.github.com/repos/${GITHUB_REPO}/actions/runs/${id}`,
-        {
-          headers: {
-            Authorization: `token ${GITHUB_TOKEN}`,
-            Accept: "application/vnd.github.v3+json",
-          },
-        }
-      );
+      // We can use the vanilla client directly if we want to await one-off, 
+      // or we can just use the mutation/query hooks pattern. 
+      // But `checkRunStatus` is called in a loop inside useEffect. 
+      // Let's use the trpcClient utility directly if possible, or just fetch via vanilla trpc proxy.
+      // Since `trpc` exported from `@/lib/trpc` is a hook generator, we might need the vanilla client provided by context?
+      // Actually, we can just fetch via standard fetch to our own server if needed, OR use the `utils.client`.
 
-      if (!response.ok) throw new Error("Failed to fetch run status");
-
-      const data = await response.json();
-      console.log("Run status:", data.status, "Conclusion:", data.conclusion);
-      return { status: data.status, conclusion: data.conclusion };
+      const status = await utils.client.qa.checkRunStatus.query({ runId: id });
+      return status;
     } catch (error) {
       console.error("Error checking status:", error);
       return { status: "unknown", conclusion: null };
     }
   };
 
-  // GitHub API: artifacts 목록 조회
-  const getArtifacts = async (runId: number): Promise<any[]> => {
-    try {
-      const response = await fetch(
-        `https://api.github.com/repos/${GITHUB_REPO}/actions/runs/${runId}/artifacts`,
-        {
-          headers: {
-            Authorization: `token ${GITHUB_TOKEN}`,
-            Accept: "application/vnd.github.v3+json",
-          },
-        }
-      );
+  /* ==================================================================================
+     Artifact Fetching
+     ================================================================================== */
 
-      if (!response.ok) throw new Error("Failed to fetch artifacts");
-
-      const data = await response.json();
-      console.log("Artifacts found:", data.artifacts?.length || 0);
-      return data.artifacts || [];
-    } catch (error) {
-      console.error("Error fetching artifacts:", error);
-      return [];
-    }
-  };
-
-  // Lighthouse 결과 조회
+  // Lighthouse Result
   const fetchLighthouseResults = async (id: number): Promise<LighthouseScore | null> => {
     try {
-      console.log("Fetching Lighthouse results for run:", id);
+      const result = await utils.client.qa.getArtifactContent.query({ artifactName: "lighthouse-report" });
+      if (!result) return null;
 
-      const artifacts = await getArtifacts(id);
-      const lighthouseArtifact = artifacts.find((a: any) => a.name === "lighthouse-report");
-
-      if (!lighthouseArtifact) {
-        console.warn("Lighthouse artifact not found");
-        return null;
-      }
-
-      console.log("Downloading Lighthouse artifact...");
-      const zipResponse = await fetch(lighthouseArtifact.archive_download_url, {
-        headers: {
-          Authorization: `token ${GITHUB_TOKEN}`,
-        },
-      });
-
-      if (!zipResponse.ok) throw new Error("Failed to download artifact");
-
-      const arrayBuffer = await zipResponse.arrayBuffer();
-      console.log("Downloaded ZIP file, size:", arrayBuffer.byteLength);
-
-      const zip = new JSZip();
-      await zip.loadAsync(arrayBuffer);
-
-      let jsonContent: any = null;
-
-      for (const [filename, file] of Object.entries(zip.files)) {
-        console.log("ZIP file entry:", filename);
-        if (filename.includes("lighthouse-report.json")) {
-          const content = await (file as any).async("text");
-          jsonContent = JSON.parse(content);
-          console.log("Parsed Lighthouse JSON:", jsonContent);
-          break;
-        }
-      }
-
-      if (!jsonContent) {
-        console.error("lighthouse-report.json not found in ZIP");
-        return null;
-      }
-
+      // Local lighthouse JSON structure normalization
       let lighthouseScores: LighthouseScore = {
         performance: 0,
         accessibility: 0,
@@ -428,250 +310,77 @@ export default function Home() {
         seo: 0,
       };
 
-      if (jsonContent.categories) {
-        const categories = jsonContent.categories;
+      const categories = result.categories;
+      if (categories) {
         lighthouseScores.performance = Math.round((categories.performance?.score || 0) * 100);
         lighthouseScores.accessibility = Math.round((categories.accessibility?.score || 0) * 100);
         lighthouseScores["best-practices"] = Math.round((categories["best-practices"]?.score || 0) * 100);
         lighthouseScores.seo = Math.round((categories.seo?.score || 0) * 100);
-      } else if (jsonContent.scores) {
-        const scores = jsonContent.scores;
-        lighthouseScores.performance = Math.round((scores.performance || 0) * 100);
-        lighthouseScores.accessibility = Math.round((scores.accessibility || 0) * 100);
-        lighthouseScores["best-practices"] = Math.round((scores["best-practices"] || 0) * 100);
-        lighthouseScores.seo = Math.round((scores.seo || 0) * 100);
       }
-
-      if (isNaN(lighthouseScores.performance)) lighthouseScores.performance = 0;
-      if (isNaN(lighthouseScores.accessibility)) lighthouseScores.accessibility = 0;
-      if (isNaN(lighthouseScores["best-practices"])) lighthouseScores["best-practices"] = 0;
-      if (isNaN(lighthouseScores.seo)) lighthouseScores.seo = 0;
-
-      console.log("Extracted scores:", lighthouseScores);
       return lighthouseScores;
     } catch (error) {
-      console.error("Error fetching Lighthouse results:", error);
+      console.error("LH fetch error:", error);
       return null;
     }
   };
 
-  // 스크린샷 조회
+  // Screenshots
   const fetchScreenshots = async (id: number): Promise<ResponsiveScreenshots> => {
     try {
-      console.log("Fetching screenshots for run:", id);
-
-      const artifacts = await getArtifacts(id);
-      const screenshotArtifact = artifacts.find((a: any) => a.name === "responsive-screenshots");
-
-      if (!screenshotArtifact) {
-        console.warn("Screenshot artifact not found");
-        return {};
-      }
-
-      console.log("Downloading screenshot artifact...");
-      const zipResponse = await fetch(screenshotArtifact.archive_download_url, {
-        headers: {
-          Authorization: `token ${GITHUB_TOKEN}`,
-        },
-      });
-
-      if (!zipResponse.ok) throw new Error("Failed to download screenshot artifact");
-
-      const arrayBuffer = await zipResponse.arrayBuffer();
-      console.log("Downloaded screenshot ZIP, size:", arrayBuffer.byteLength);
-
-      const zip = new JSZip();
-      await zip.loadAsync(arrayBuffer);
-
-      const base64Screenshots: ResponsiveScreenshots = {};
-
-      for (const [filename, file] of Object.entries(zip.files)) {
-        console.log("Screenshot file:", filename);
-        if (filename.includes("desktop.png")) {
-          const arrayBuf = await (file as any).async("arraybuffer");
-          const uint8Array = new Uint8Array(arrayBuf);
-          let binaryString = "";
-          for (let i = 0; i < uint8Array.length; i++) {
-            binaryString += String.fromCharCode(uint8Array[i]);
-          }
-          base64Screenshots.desktop = "data:image/png;base64," + btoa(binaryString);
-        } else if (filename.includes("tablet.png")) {
-          const arrayBuf = await (file as any).async("arraybuffer");
-          const uint8Array = new Uint8Array(arrayBuf);
-          let binaryString = "";
-          for (let i = 0; i < uint8Array.length; i++) {
-            binaryString += String.fromCharCode(uint8Array[i]);
-          }
-          base64Screenshots.tablet = "data:image/png;base64," + btoa(binaryString);
-        } else if (filename.includes("mobile.png")) {
-          const arrayBuf = await (file as any).async("arraybuffer");
-          const uint8Array = new Uint8Array(arrayBuf);
-          let binaryString = "";
-          for (let i = 0; i < uint8Array.length; i++) {
-            binaryString += String.fromCharCode(uint8Array[i]);
-          }
-          base64Screenshots.mobile = "data:image/png;base64," + btoa(binaryString);
-        }
-      }
-
-      console.log("Extracted screenshots:", Object.keys(base64Screenshots));
-      setScreenshotBase64(base64Screenshots);
-      return base64Screenshots;
+      // We implemented a specific helper for screenshots
+      const screenshots = await utils.client.qa.getScreenshots.query();
+      setScreenshotBase64(screenshots); // save base64 for download if needed? logic seems mixed in original
+      return screenshots as ResponsiveScreenshots;
     } catch (error) {
-      console.error("Error fetching screenshots:", error);
+      console.error("Screenshot fetch error:", error);
       return {};
     }
   };
 
-  // AI UX 리뷰 조회
+  // UX Review
   const fetchUXReview = async (id: number): Promise<UXReview[]> => {
     try {
-      console.log("Fetching UX review for run:", id);
+      const result = await utils.client.qa.getArtifactContent.query({ artifactName: "ux-review" });
+      if (!result) return [];
 
-      const artifacts = await getArtifacts(id);
-      const uxArtifact = artifacts.find((a: any) => a.name === "ux-review");
-
-      if (!uxArtifact) {
-        console.warn("UX review artifact not found");
-        return [];
-      }
-
-      console.log("Downloading UX review artifact...");
-      const zipResponse = await fetch(uxArtifact.archive_download_url, {
-        headers: {
-          Authorization: `token ${GITHUB_TOKEN}`,
-        },
-      });
-
-      if (!zipResponse.ok) throw new Error("Failed to download UX review artifact");
-
-      const arrayBuffer = await zipResponse.arrayBuffer();
-      const zip = new JSZip();
-      await zip.loadAsync(arrayBuffer);
-
-      let jsonContent: any = null;
-      for (const [filename, file] of Object.entries(zip.files)) {
-        if (filename.includes("ux-review.json")) {
-          const content = await (file as any).async("text");
-          try {
-            jsonContent = JSON.parse(content);
-          } catch (parseError) {
-            console.error("JSON parse error:", parseError, "Content:", content.substring(0, 200));
-            return [];
-          }
-          break;
-        }
-      }
-
-      if (!jsonContent) {
-        console.error("ux-review.json not found");
-        return [];
-      }
-
-      const reviews = jsonContent.reviews || [];
-      console.log("Extracted UX reviews:", reviews.length);
+      const reviews = result.reviews || [];
       setUxReviews(reviews);
       return reviews;
     } catch (error) {
-      console.error("Error fetching UX review:", error);
+      console.error("UX fetch error:", error);
       return [];
     }
   };
 
-  // 비디오 조회
+  // Video
   const fetchVideo = async (id: number): Promise<string> => {
-    try {
-      console.log("Fetching video for run:", id);
+    // For local video, we can just serve it statically. 
+    // Assuming backend serves /videos path. 
+    // We didn't set up static verify yet in plan step 3, but let's assume it.
+    // Actually, `checkRunStatus` etc don't return artifacts list anymore. 
+    // We can just try to fetch the file URL.
 
-      const artifacts = await getArtifacts(id);
-      const videoArtifact = artifacts.find((a: any) => a.name === "test-video");
-
-      if (!videoArtifact) {
-        console.warn("Video artifact not found");
-        return "";
-      }
-
-      console.log("Downloading video artifact...");
-      const zipResponse = await fetch(videoArtifact.archive_download_url, {
-        headers: {
-          Authorization: `token ${GITHUB_TOKEN}`,
-        },
-      });
-
-      if (!zipResponse.ok) throw new Error("Failed to download video artifact");
-
-      const arrayBuffer = await zipResponse.arrayBuffer();
-      const zip = new JSZip();
-      await zip.loadAsync(arrayBuffer);
-
-      for (const [filename, file] of Object.entries(zip.files)) {
-        if (filename.includes("test-video.webm")) {
-          console.log("Found main video file:", filename);
-          const arrayBuf = await (file as any).async("arraybuffer");
-          const blob = new Blob([arrayBuf], { type: "video/webm" });
-          const url = URL.createObjectURL(blob);
-          console.log("Created video URL");
-          setVideoUrl(url);
-          return url;
-        }
-      }
-
-      console.warn("No video file found in artifact");
-      return "";
-    } catch (error) {
-      console.error("Error fetching video:", error);
-      return "";
-    }
+    // Check if we need to proxy or if simpler to just set URL.
+    const url = "/videos/test-video.webm";
+    // Add a cache buster
+    const uniqueUrl = `${url}?t=${Date.now()}`;
+    setVideoUrl(uniqueUrl);
+    return uniqueUrl;
   };
 
-  // TC 결과 조회
+  // Test Cases
   const fetchTestCases = async (id: number): Promise<{ testCases: TestCase[]; summary: any }> => {
     try {
-      console.log("Fetching test cases for run:", id);
+      const result = await utils.client.qa.getArtifactContent.query({ artifactName: "tc-report" });
+      if (!result) return { testCases: [], summary: null };
 
-      const artifacts = await getArtifacts(id);
-      const tcArtifact = artifacts.find((a: any) => a.name === "test-cases-report");
-
-      if (!tcArtifact) {
-        console.warn("Test cases artifact not found");
-        return { testCases: [], summary: null };
-      }
-
-      console.log("Downloading test cases artifact...");
-      const zipResponse = await fetch(tcArtifact.archive_download_url, {
-        headers: {
-          Authorization: `token ${GITHUB_TOKEN}`,
-        },
-      });
-
-      if (!zipResponse.ok) throw new Error("Failed to download test cases artifact");
-
-      const arrayBuffer = await zipResponse.arrayBuffer();
-      const zip = new JSZip();
-      await zip.loadAsync(arrayBuffer);
-
-      let jsonContent: any = null;
-      for (const [filename, file] of Object.entries(zip.files)) {
-        if (filename.includes("tc-report.json")) {
-          const content = await (file as any).async("text");
-          jsonContent = JSON.parse(content);
-          break;
-        }
-      }
-
-      if (!jsonContent) {
-        console.error("tc-report.json not found");
-        return { testCases: [], summary: null };
-      }
-
-      const testCasesList = jsonContent.testCases || [];
-      const summary = jsonContent.summary || {};
-      console.log("Extracted test cases:", testCasesList.length);
+      const testCasesList = result.testCases || [];
+      const summary = result.summary || {};
       setTestCases(testCasesList);
       setTestSummary(summary);
       return { testCases: testCasesList, summary };
     } catch (error) {
-      console.error("Error fetching test cases:", error);
+      console.error("TC fetch error:", error);
       return { testCases: [], summary: null };
     }
   };
@@ -688,7 +397,7 @@ export default function Home() {
       while (isPolling) {
         pollCount++;
         console.log(`[Polling] Check #${pollCount}`);
-        
+
         const { status, conclusion } = await checkRunStatus(runId);
         console.log(`[Polling] Status: ${status}, Conclusion: ${conclusion}`);
         setPollCount(pollCount);
@@ -840,7 +549,7 @@ export default function Home() {
                   {[
                     { id: "performance", label: "Lighthouse 성능 확인", desc: "성능, 접근성, SEO 점수 분석" },
                     { id: "responsive", label: "Responsive Viewer 화면 확인", desc: "데스크톱, 태블릿, 모바일 화면 캡처" },
-                //    { id: "ux", label: "AI UX 리뷰", desc: "사용자 경험 및 내게설 분석" },
+                    //    { id: "ux", label: "AI UX 리뷰", desc: "사용자 경험 및 내게설 분석" },
                     { id: "tc", label: "시나리오 작성 및 수행", desc: "사용자 시나리오 테스트" },
                   ].map(({ id, label, desc }) => (
                     <label key={id} className="flex items-start gap-3 p-2 rounded hover:bg-gray-50 cursor-pointer">

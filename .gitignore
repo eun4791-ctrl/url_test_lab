@@ -105,3 +105,6 @@ temp/
 *.db
 *.sqlite
 *.sqlite3
+videos/
+reports/
+screenshots/

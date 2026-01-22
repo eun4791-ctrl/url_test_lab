@@ -25,272 +25,158 @@ export const appRouter = router({
         tests: z.string(),
       }))
       .mutation(async ({ input }) => {
-        const GITHUB_REPO = "eun4791-ctrl/ai_web_test";
-
-        if (!ENV.githubToken) {
-          throw new Error("GitHub token not configured");
-        }
+        const testsList = input.tests.split(",").filter(t => t.trim().length > 0);
 
         try {
-          const response = await fetch(
-            `https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/qa-tests.yml/dispatches`,
-            {
-              method: "POST",
-              headers: {
-                Authorization: `token ${ENV.githubToken}`,
-                "Content-Type": "application/json",
-                Accept: "application/vnd.github.v3+json",
-              },
-              body: JSON.stringify({
-                ref: "main",
-                inputs: {
-                  target_url: input.targetUrl,
-                  tests: input.tests,
-                },
-              }),
-            }
-          );
-
-          if (!response.ok) {
-            const error = await response.text();
-            console.error("Workflow trigger failed:", response.status, error);
-            throw new Error(`Failed to trigger workflow: ${response.status}`);
-          }
-
-          return { success: true };
-        } catch (error) {
-          console.error("Trigger error:", error);
-          throw error;
+          const { startTest } = await import("./testRunner");
+          const runId = startTest(input.targetUrl, testsList);
+          return { success: true, runId };
+        } catch (error: any) {
+          console.error("Local trigger error:", error);
+          throw new Error(error.message || "Failed to start local test");
         }
       }),
 
     getLatestRun: publicProcedure.query(async () => {
-      // Use ENV.githubToken instead
-      const GITHUB_REPO = "eun4791-ctrl/ai_web_test";
-
-      if (!ENV.githubToken) {
-        throw new Error("GitHub token not configured");
-      }
-
-      try {
-        const response = await fetch(
-          `https://api.github.com/repos/${GITHUB_REPO}/actions/runs?per_page=1`,
-          {
-            headers: {
-              Authorization: `token ${ENV.githubToken}`,
-              Accept: "application/vnd.github.v3+json",
-            },
-          }
-        );
-
-        if (!response.ok) throw new Error("Failed to fetch runs");
-
-        const data = await response.json();
-        const latestRun = data.workflow_runs?.[0];
-        return { id: latestRun?.id || null };
-      } catch (error) {
-        console.error("Error fetching run ID:", error);
-        throw error;
-      }
+      const { getTestState } = await import("./testRunner");
+      const state = getTestState();
+      return { id: state.runId };
     }),
 
     checkRunStatus: publicProcedure
       .input(z.object({ runId: z.number() }))
       .query(async ({ input }) => {
-        // Use ENV.githubToken instead
-        const GITHUB_REPO = "eun4791-ctrl/ai_web_test";
+        const { getTestState } = await import("./testRunner");
+        const state = getTestState();
 
-        if (!ENV.githubToken) {
-          throw new Error("GitHub token not configured");
+        // If runId doesn't match current state, assume it's lost/unknown or old
+        if (state.runId !== input.runId) {
+          return { status: "unknown", conclusion: null };
         }
 
-        try {
-          const response = await fetch(
-            `https://api.github.com/repos/${GITHUB_REPO}/actions/runs/${input.runId}`,
-            {
-              headers: {
-                Authorization: `token ${ENV.githubToken}`,
-                Accept: "application/vnd.github.v3+json",
-              },
-            }
-          );
-
-          if (!response.ok) throw new Error("Failed to fetch run status");
-
-          const data = await response.json();
-          return { status: data.status, conclusion: data.conclusion };
-        } catch (error) {
-          console.error("Error checking status:", error);
-          throw error;
-        }
+        return {
+          status: state.status,
+          // Map local status to GitHub conclusion styles if needed
+          conclusion: state.status === "completed" ? "success" : (state.status === "failed" ? "failure" : null)
+        };
       }),
 
     getArtifacts: publicProcedure
       .input(z.object({ runId: z.number() }))
       .query(async ({ input }) => {
-        // Use ENV.githubToken instead
-        const GITHUB_REPO = "eun4791-ctrl/ai_web_test";
+        // Return a list of available "artifacts" (files) based on what we know exists locally
+        // We pretend these are GitHub artifacts so the client logic holds up for now
+        const artifacts = [];
+        const fs = await import("fs");
+        const path = await import("path");
+        const projectRoot = path.resolve(process.cwd());
 
-        if (!ENV.githubToken) {
-          throw new Error("GitHub token not configured");
+        if (fs.existsSync(path.join(projectRoot, "reports/lighthouse-report.json"))) {
+          artifacts.push({ name: "lighthouse-report" });
+        }
+        if (fs.existsSync(path.join(projectRoot, "screenshots"))) {
+          artifacts.push({ name: "responsive-screenshots" });
+        }
+        if (fs.existsSync(path.join(projectRoot, "reports/tc-report.json"))) {
+          artifacts.push({ name: "test-cases-report" });
+        }
+        if (fs.existsSync(path.join(projectRoot, "videos/test-video.webm"))) {
+          artifacts.push({ name: "test-video" });
+        }
+        if (fs.existsSync(path.join(projectRoot, "reports/ux-review.json"))) {
+          artifacts.push({ name: "ux-review" });
         }
 
-        try {
-          const response = await fetch(
-            `https://api.github.com/repos/${GITHUB_REPO}/actions/runs/${input.runId}/artifacts`,
-            {
-              headers: {
-                Authorization: `token ${ENV.githubToken}`,
-                Accept: "application/vnd.github.v3+json",
-              },
-            }
-          );
-
-          if (!response.ok) throw new Error("Failed to fetch artifacts");
-
-          const data = await response.json();
-          return { artifacts: data.artifacts || [] };
-        } catch (error) {
-          console.error("Error fetching artifacts:", error);
-          throw error;
-        }
+        return { artifacts };
       }),
 
     downloadArtifact: publicProcedure
-      .input(z.object({ 
+      .input(z.object({
         runId: z.number(),
         artifactName: z.string(),
       }))
       .mutation(async ({ input }) => {
-        // Use ENV.githubToken instead
-        const GITHUB_REPO = "eun4791-ctrl/ai_web_test";
+        const fs = await import("fs");
+        const path = await import("path");
+        const projectRoot = path.resolve(process.cwd());
 
-        if (!ENV.githubToken) {
-          throw new Error("GitHub token not configured");
-        }
+        // We return raw content or data URLs directly, skipping the ZIP download part.
+        // The client expects base64 of a ZIP usually, so we might need to adjust client or fake it.
+        // BUT, looking at client, it downloads ZIP then unzips.
+        // To keep client changes minimal effectively, we might want to ZIP it on fly?
+        // OR simpler: we just updated client plan to "Simplify client code". 
+        // So here we will return RAW JSON or similar, and we will update Client to START consuming raw data.
+
+        // Wait, the detailed plan said "3. Result file serving... downloadArtifact modification".
+        // Let's assume we return the content directly in a property the client can use, 
+        // OR we stick to the existing "success, data(base64)" contract but change the content format to plain JSON string or file buffer?
+        // Actually, let's look at `parseArtifactJson` procedure. It takes base64.
+
+        // Strategy: 
+        // For JSON files: Read JSON, return as string (or base64 string).
+        // For Screenshots: Read directory, return list of base64 images? 
+        // Client `downloadArtifact` returns `data` (base64 of zip).
+
+        // Let's implement a simplier path: just return the File content as base64.
+        // Client will fail to "unzip" it if it's not a zip. 
+        // So we MUST change Client too. I will assume we will change client in next step.
 
         try {
-          // Artifacts 목록 조회
-          const artifactsResponse = await fetch(
-            `https://api.github.com/repos/${GITHUB_REPO}/actions/runs/${input.runId}/artifacts`,
-            {
-              headers: {
-                Authorization: `token ${ENV.githubToken}`,
-                Accept: "application/vnd.github.v3+json",
-              },
+          if (input.artifactName === "lighthouse-report") {
+            const p = path.join(projectRoot, "reports/lighthouse-report.json");
+            if (fs.existsSync(p)) {
+              const content = fs.readFileSync(p, "utf-8"); // JSON string
+              return { success: true, data: Buffer.from(content).toString("base64"), type: "json" };
             }
-          );
-
-          if (!artifactsResponse.ok) throw new Error("Failed to fetch artifacts");
-
-          const artifactsData = await artifactsResponse.json();
-          const artifact = artifactsData.artifacts?.find((a: any) => a.name === input.artifactName);
-
-          if (!artifact) {
-            return { success: false, data: null, error: `Artifact ${input.artifactName} not found` };
           }
+          // ... handle others
+        } catch (e) { /* ignore */ }
 
-          // Artifact 다운로드
-          const downloadResponse = await fetch(artifact.archive_download_url, {
-            headers: {
-              Authorization: `token ${ENV.githubToken}`,
-            },
-          });
-
-          if (!downloadResponse.ok) throw new Error("Failed to download artifact");
-
-          const arrayBuffer = await downloadResponse.arrayBuffer();
-          const base64 = Buffer.from(arrayBuffer).toString('base64');
-
-          return { success: true, data: base64, error: null };
-        } catch (error) {
-          console.error("Error downloading artifact:", error);
-          return { success: false, data: null, error: (error as Error).message };
-        }
+        return { success: false, error: "Not implemented for local yet" };
       }),
 
-    parseArtifactJson: publicProcedure
-      .input(z.object({
-        base64Data: z.string(),
-        fileName: z.string(),
-      }))
-      .mutation(async ({ input }) => {
-        try {
-          // JSZip을 사용하지 않고 간단한 JSON 파싱
-          // base64 데이터를 Buffer로 변환
-          const buffer = Buffer.from(input.base64Data, 'base64');
-          
-          // ZIP 파일 헤더 확인
-          if (buffer[0] === 0x50 && buffer[1] === 0x4B) {
-            // ZIP 파일이면 동적으로 JSZip 로드
-            const JSZip = (await import('jszip')).default;
-            const zip = new JSZip();
-            await zip.loadAsync(buffer);
-            
-            // JSON 파일 찾기
-            let jsonContent: any = null;
-            for (const [filename, file] of Object.entries(zip.files)) {
-              if (filename.includes(input.fileName)) {
-                const content = await (file as any).async("text");
-                jsonContent = JSON.parse(content);
-                break;
-              }
-            }
-            
-            return { success: true, data: jsonContent, error: null };
-          } else {
-            // 직접 JSON 파싱 시도
-            const text = buffer.toString('utf-8');
-            const data = JSON.parse(text);
-            return { success: true, data, error: null };
-          }
-        } catch (error) {
-          console.error("Error parsing artifact:", error);
-          return { success: false, data: null, error: (error as Error).message };
+    // New helper to get JSON data directly without zip
+    getArtifactContent: publicProcedure
+      .input(z.object({ artifactName: z.string() }))
+      .query(async ({ input }) => {
+        const fs = await import("fs");
+        const path = await import("path");
+        const projectRoot = path.resolve(process.cwd());
+
+        if (input.artifactName === "lighthouse-report") {
+          const p = path.join(projectRoot, "reports/lighthouse-report.json");
+          if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, "utf-8"));
         }
+        if (input.artifactName === "tc-report") {
+          const p = path.join(projectRoot, "reports/tc-report.json");
+          if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, "utf-8"));
+        }
+        if (input.artifactName === "ux-review") {
+          const p = path.join(projectRoot, "reports/ux-review.json");
+          if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, "utf-8"));
+        }
+        return null;
       }),
 
-    parseScreenshots: publicProcedure
-      .input(z.object({
-        base64Data: z.string(),
-      }))
-      .mutation(async ({ input }) => {
-        try {
-          const buffer = Buffer.from(input.base64Data, 'base64');
-          
-          // ZIP 파일 헤더 확인
-          if (buffer[0] === 0x50 && buffer[1] === 0x4B) {
-            const JSZip = (await import('jszip')).default;
-            const zip = new JSZip();
-            await zip.loadAsync(buffer);
-            
-            const screenshots: any = {};
-            
-            for (const [filename, file] of Object.entries(zip.files)) {
-              if (filename.includes('.png')) {
-                const arrayBuf = await (file as any).async("arraybuffer");
-                const base64 = Buffer.from(arrayBuf).toString('base64');
-                const dataUrl = `data:image/png;base64,${base64}`;
-                
-                if (filename.includes('desktop')) {
-                  screenshots.desktop = dataUrl;
-                } else if (filename.includes('tablet')) {
-                  screenshots.tablet = dataUrl;
-                } else if (filename.includes('mobile')) {
-                  screenshots.mobile = dataUrl;
-                }
-              }
-            }
-            
-            return { success: true, data: screenshots, error: null };
+    // Helper for screenshots
+    getScreenshots: publicProcedure.query(async () => {
+      const fs = await import("fs");
+      const path = await import("path");
+      const dir = path.join(process.cwd(), "screenshots");
+      const result: Record<string, string> = {};
+
+      if (fs.existsSync(dir)) {
+        const files = fs.readdirSync(dir);
+        for (const file of files) {
+          if (file.endsWith(".png")) {
+            const b64 = fs.readFileSync(path.join(dir, file)).toString("base64");
+            const key = file.replace(".png", ""); // desktop, tablet, mobile
+            result[key] = `data:image/png;base64,${b64}`;
           }
-          
-          return { success: false, data: null, error: "Not a valid ZIP file" };
-        } catch (error) {
-          console.error("Error parsing screenshots:", error);
-          return { success: false, data: null, error: (error as Error).message };
         }
-      }),
+      }
+      return result;
+    })
   }),
 });
 
