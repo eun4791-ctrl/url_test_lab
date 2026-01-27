@@ -44,25 +44,27 @@ const context = await browser.newContext({
 /* 🔑 page는 1개만 */
 const page = await context.newPage();
 
-/* ================= 결과 집계 ================= */
+/* ================= 결과 및 통계 ================= */
 const rows = [];
 let pass = 0;
 let fail = 0;
 let na = 0;
+let totalUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
 
 const record = (tc) => {
   rows.push(tc);
   if (tc.result === 'Pass') {
     pass++;
     console.log(`✅ [PASS] ${tc.id}: ${tc.title}`);
-  } else if (tc.result === 'Fail') {
+  } else if (tc.result.startsWith('Fail')) {
     fail++;
-    console.error(`❌ [FAIL] ${tc.id}: ${tc.title} - ${tc.log}`);
+    console.error(`❌ [${tc.result}] ${tc.id}: ${tc.title} - ${tc.log}`);
   } else {
     na++;
     console.warn(`⚠️ [N/A] ${tc.id}: ${tc.title}`);
   }
 };
+
 
 /* ================= 🎞️ 시각화 유틸 ================= */
 const showTCOverlay = async (page, tc) => {
@@ -190,91 +192,186 @@ async function extractPageContext(page) {
   });
 }
 
-function createPrompt(contextString) {
+function createPrompt(contextString, count, startId = 1, existingTitles = []) {
+  const startIdStr = String(startId).padStart(3, '0');
+  const excludePart = existingTitles.length > 0
+    ? `\n[중복 제외 항목]\n다음은 이미 작성된 테스트 항목들입니다. 아래 내용과 중복되지 않는 새로운 시나리오를 작성하세요:\n- ${existingTitles.join('\n- ')}\n`
+    : '';
+
   return [
     `당신은 어떤 웹사이트든 검증할 수 있는 **범용적이고 방어적인 QA 엔지니어**입니다.`,
-    `제공된 HTML 구조를 기반으로 **가장 안정적인 Smoke Test(기본 기능 점검) 최대 ${TC_COUNT}개**를 작성하세요.`,
-    `페이지가 매우 단순하다면 개수를 줄여도 좋지만, 복잡하다면 ${TC_COUNT}개를 꽉 채워서 작성하세요.`,
+    `제공된 HTML 구조를 기반으로 **가장 안정적인 Smoke Test ${count}개**를 작성하세요.`,
+    `ID는 TC-${startIdStr}부터 순차적으로 부여하세요.`,
+    excludePart,
     ``,
-
-    `[페이지 HTML 구조]`,
+    `[핵심 원칙]`,
+    `1. **안정적인 셀렉터**: id, data-testid, aria-label 우선 사용.`,
+    `2. **새 탭 대응**: target="_blank" 링크는 'clickNewTab' 액션을 사용하세요.`,
+    `3. **검증 중심**: 단순 클릭만 하지 말고, 클릭 후 결과(URL 변경, 요소 노출 등)를 반드시 확인하세요.`,
+    ``,
+    `[페이지 구조]`,
     `\`\`\`html`,
-    `${contextString.substring(0, 20000)}`,
+    `${contextString}`,
     `\`\`\``,
     ``,
-    `[핵심 원칙: 안정성 최우선]`,
-    `1. **시각적 강조 (필수)**: 모든 상호작용 전 반드시 highlight(locator) 호출.`,
-    `2. **새 탭(target="_blank") 대응**: 스토어 이동 등 외부 링크 클릭 시 새 탭이 열린다면 다음 패턴을 사용하세요.`,
-    `   예시: const [newPage] = await Promise.all([context.waitForEvent('page'), locator.click()]); await newPage.waitForLoadState();`,
-    `3. **네비게이션 주의**: waitForNavigation()은 현재 페이지가 완전히 전환될 때만 사용하세요. SPA의 경우 타임아웃이 나기 쉬우므로 URL 확인이나 요소 존재 여부로 대체하는 것이 좋습니다.`,
-    `4. **Strict Mode 방지**: .first() 사용 필수.`,
-    `5. **방어적 코드**: if (await locator.isVisible()) ...`,
-
-    ``,
-    `[출력 형식 및 언어 설정]`,
-    `1. **title, precondition, testStep, expectedResults**: 반드시 **한국어**로 작성하세요.`,
-    `2. **tc.log (code 내부)**: 반드시 **영어(English)**로 작성하세요.`,
-    `3. JSON 배열만 반환하세요.`,
+    `[출력 형식]`,
+    `반드시 다음 구조의 JSON 배열만 반환하세요. 'steps'의 'action'은 [click, type, check, wait, clickNewTab] 중 하나여야 합니다.`,
     `[`,
     `  {`,
-    `    "id": "TC-001",`,
-    `    "title": "메인 로고 표시 확인",`,
+    `    "id": "TC-${startIdStr}",`,
+    `    "title": "로고 표시 및 홈 이동 확인 (한국어 작성)",`,
     `    "precondition": "URL 접속",`,
-    `    "testStep": "로고 요소 확인",`,
-    `    "expectedResults": "로고가 화면에 표시됨",`,
-    `    "code": "const logo = page.locator('header a, .logo').first();\\nif (await logo.isVisible()) {\\n  await highlight(logo);\\n  tc.result='Pass';\\n} else {\\n  tc.result='Fail'; tc.log='Logo element not found in header';\\n}"`,
+    `    "testStep": "설명 (한국어)",`,
+    `    "expectedResults": "설명 (한국어)",`,
+    `    "steps": [`,
+    `      { "action": "check", "selector": "header img.logo", "desc": "Check logo visible" },`,
+    `      { "action": "click", "selector": "nav a.home", "desc": "Click home link" },`,
+    `      { "action": "wait", "value": 1000 },`,
+    `      { "action": "check", "selector": "h1.hero-title", "desc": "Verify arrival" }`,
+    `    ]`,
     `  }`,
     `]`
-
-
-
   ].join('\n');
 }
 
+
+
 async function generateTestCases(contextString) {
-  console.log('🤖 Generating test cases using optimized DOM context...');
+  const batchSize = 15;
+  let allTestCases = [];
+  let allTitles = [];
 
-  const prompt = createPrompt(contextString);
+  const totalBatches = Math.ceil(TC_COUNT / batchSize);
+  console.log(`🤖 Batching with gpt-4o-mini: ${TC_COUNT} TCs in ${totalBatches} batches...`);
 
-  try {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENAI_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o', // or gpt-3.5-turbo-16k if needed for long context
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.5 // Lower temperature for more deterministic code
-      })
-    });
+  // Context Caching: Use first 15000 chars to avoid token bloat
+  const cachedContext = contextString.substring(0, 15000);
 
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`API Request failed: ${response.status}\n${errText}`);
-    }
+  for (let i = 0; i < totalBatches; i++) {
+    const currentBatchCount = Math.min(batchSize, TC_COUNT - (i * batchSize));
+    const startId = (i * batchSize) + 1;
 
-    const data = await response.json();
-    let content = data.choices[0].message.content;
+    console.log(`📦 Batch ${i + 1}/${totalBatches}: Generating ${currentBatchCount} TCs...`);
 
-    // Cleanup markdown
-    content = content.replace(/```json/g, '').replace(/```/g, '').trim();
+    const prompt = createPrompt(cachedContext, currentBatchCount, startId, allTitles);
 
     try {
-      return JSON.parse(content);
-    } catch (parseErr) {
-      console.error("JSON Parse Error. Raw content:", content);
-      return [];
-    }
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${OPENAI_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.3,
+          max_tokens: 4096
+        })
+      });
 
-  } catch (err) {
-    console.error('Failed to generate test cases:', err);
-    return [];
+      if (!response.ok) {
+        const errText = await response.text();
+        console.error(`❌ Batch ${i + 1} Failed: ${response.status}`);
+        continue;
+      }
+
+      const data = await response.json();
+
+      // Usage Tracking
+      if (data.usage) {
+        totalUsage.prompt_tokens += data.usage.prompt_tokens;
+        totalUsage.completion_tokens += data.usage.completion_tokens;
+        totalUsage.total_tokens += data.usage.total_tokens;
+      }
+
+      let content = data.choices[0].message.content;
+      content = content.replace(/```json/g, '').replace(/```/g, '').trim();
+
+      try {
+        const parsed = JSON.parse(content);
+        if (Array.isArray(parsed)) {
+          allTestCases = allTestCases.concat(parsed);
+          allTitles = allTitles.concat(parsed.map(t => t.title));
+          console.log(`✅ Batch ${i + 1} merged. Accumulated: ${allTestCases.length} TCs`);
+        }
+      } catch (parseErr) {
+        console.error(`❌ Batch ${i + 1} JSON Error:`, parseErr.message);
+      }
+    } catch (err) {
+      console.error(`❌ Batch ${i + 1} System Error:`, err.message);
+    }
   }
+
+  console.log(`\n📊 Usage Stats: Prompt=${totalUsage.prompt_tokens}, Completion=${totalUsage.completion_tokens}, Total=${totalUsage.total_tokens}`);
+  return allTestCases;
 }
 
-/* ================= 메인 실행 로직 ================= */
+
+
+/* ================= Playwright 실행 엔진 ================= */
+
+/**
+ * AI의 설계(JSON)를 바탕으로 실제 브라우저 조작을 수행합니다.
+ */
+async function runPlaybookAction(page, context, step) {
+  const { action, selector, value, desc } = step;
+  console.log(`   [Action] ${action}: ${desc || selector || ''}`);
+
+  const locator = selector ? page.locator(selector).first() : null;
+
+  try {
+    switch (action) {
+      case 'check':
+        if (!locator) throw new Error('Selector is required for check');
+        await highlight(locator);
+        await expect(locator).toBeVisible({ timeout: 5000 });
+        break;
+
+      case 'click':
+        if (!locator) throw new Error('Selector is required for click');
+        await highlight(locator);
+        await locator.click({ timeout: 5000 });
+        break;
+
+      case 'type':
+        if (!locator) throw new Error('Selector is required for type');
+        await highlight(locator);
+        await locator.fill(value || '');
+        break;
+
+      case 'wait':
+        await page.waitForTimeout(value || 1000);
+        break;
+
+      case 'clickNewTab':
+        if (!locator) throw new Error('Selector is required for clickNewTab');
+        await highlight(locator);
+        const [newPage] = await Promise.all([
+          context.waitForEvent('page', { timeout: 10000 }),
+          locator.click()
+        ]);
+        await newPage.waitForLoadState();
+        await newPage.close();
+        break;
+
+      default:
+        throw new Error(`Unknown action: ${action}`);
+    }
+  } catch (e) {
+    // Fail 타입 세분화
+    let failType = 'Fail-General';
+    const msg = e.message.toLowerCase();
+    if (msg.includes('locator') || msg.includes('selector')) failType = 'Fail-Selector';
+    else if (msg.includes('expect') || msg.includes('visible')) failType = 'Fail-Assertion';
+    else if (msg.includes('timeout') || msg.includes('navigation')) failType = 'Fail-Navigation';
+
+    throw { message: e.message, failType };
+  }
+
+}
+
+
 
 try {
   await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded' });
@@ -297,9 +394,7 @@ try {
 
   console.log(`🚀 Generated ${dynamicTCS.length} test cases.`);
 
-  // 3. Execution
-  const AsyncFunction = Object.getPrototypeOf(async function () { }).constructor;
-
+  // 3. Execution (플레이북 방식)
   for (const t of dynamicTCS) {
     const tc = {
       id: t.id,
@@ -309,60 +404,39 @@ try {
       expectedResults: t.expectedResults || '',
       result: 'N/A',
       log: '',
-      code: t.code || ''
+      code: JSON.stringify(t.steps, null, 2) // 설계도를 로그로 남김
     };
-
 
     console.log(`▶ Running ${tc.id}: ${tc.title}`);
 
     try {
-      // 🔄 Isolation: Reload to initial state
+      // 🔄 Isolation
       try {
         if (page.url() !== TARGET_URL) {
           await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded', timeout: 10000 });
         } else {
-          // For SPAs, verify if reload is necessary or if we can just reset? 
-          // Reload is safest.
           await page.reload({ waitUntil: 'domcontentloaded', timeout: 10000 });
         }
-      } catch (e) {
-        console.log("Reload warning:", e.message);
-      }
+      } catch (e) { /* ignore reload warns */ }
 
-      await page.waitForTimeout(1000); // Stability wait
+      await page.waitForTimeout(1000);
       await showTCOverlay(page, tc);
 
-      // Execute dynamic code
-      if (t.code) {
-        // console.log(`[Executing Code]\n${t.code}`);
-        const runFunc = new AsyncFunction('page', 'tc', 'context', 'expect', 'highlight', t.code);
-        // Inject expect for assertions
-        await runFunc(page, tc, context, expect, highlight);
-
-        // Fallback: if result is Fail but no log, provide a generic one
-        if (tc.result === 'Fail' && !tc.log) {
-          tc.log = 'Test condition not met (no detailed log available)';
+      if (t.steps && Array.isArray(t.steps)) {
+        for (const step of t.steps) {
+          await runPlaybookAction(page, context, step);
         }
-
+        tc.result = 'Pass';
       } else {
-
-        tc.result = 'N/A';
-        tc.log = 'No code generated';
+        tc.result = 'Fail-AI';
+        tc.log = 'No steps provided in AI design';
       }
 
     } catch (e) {
-      tc.result = 'Fail';
+      tc.result = e.failType || 'Fail-General';
       tc.log = e.message;
-      console.error(`❌ Error in ${tc.id}: ${tc.title}`);
-      if (t.code) {
-        console.error(`[Failing Code]:\n${t.code}\n`);
-      }
-      console.error(e);
+      console.error(`❌ ${tc.result} in ${tc.id}: ${e.message}`);
     }
-
-
-
-
 
     record(tc);
     await page.waitForTimeout(500);
@@ -371,6 +445,7 @@ try {
 } catch (e) {
   console.error('Fatal error details:', e);
 }
+
 
 /* ================= 리포트 ================= */
 try {
@@ -392,6 +467,7 @@ try {
     JSON.stringify({
       url: TARGET_URL,
       timestamp: new Date().toISOString(),
+      usage: totalUsage,
       testCases,
       summary: {
         total: rows.length,
@@ -402,6 +478,7 @@ try {
         successRate: rows.length > 0 ? Math.round((pass / rows.length) * 100) : 0
       }
     }, null, 2)
+
   );
 
   console.log(`📝 Report saved to ${reportPath}`);
