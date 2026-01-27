@@ -198,10 +198,13 @@ function createPrompt(contextString) {
     `\`\`\``,
     ``,
     `[핵심 원칙: 안정성 최우선]`,
-    `1. **시각적 강조 (필수)**: 모든 상호작용(클릭, 확인) 전에 **반드시 \`await highlight(locator)\`를 호출하세요**. 그래야 비디오에 빨간 테두리가 표시됩니다.`,
-    `2. **Strict Mode 방지**: \`.first()\` 사용 필수.`,
-    `3. **방어적 코드**: \`if (await locator.isVisible()) ...\``,
-    `4. **타임아웃 관리**: 네비게이션 대기는 5초 제한.`,
+    `1. **시각적 강조 (필수)**: 모든 상호작용 전 반드시 highlight(locator) 호출.`,
+    `2. **새 탭(target="_blank") 대응**: 스토어 이동 등 외부 링크 클릭 시 새 탭이 열린다면 다음 패턴을 사용하세요.`,
+    `   예시: const [newPage] = await Promise.all([context.waitForEvent('page'), locator.click()]); await newPage.waitForLoadState();`,
+    `3. **네비게이션 주의**: waitForNavigation()은 현재 페이지가 완전히 전환될 때만 사용하세요. SPA의 경우 타임아웃이 나기 쉬우므로 URL 확인이나 요소 존재 여부로 대체하는 것이 좋습니다.`,
+    `4. **Strict Mode 방지**: .first() 사용 필수.`,
+    `5. **방어적 코드**: if (await locator.isVisible()) ...`,
+
     ``,
     `[출력 형식]`,
     `JSON 배열만 반환하세요.`,
@@ -299,8 +302,10 @@ try {
       testStep: t.testStep || '',
       expectedResults: t.expectedResults || '',
       result: 'N/A',
-      log: ''
+      log: '',
+      code: t.code || ''
     };
+
 
     console.log(`▶ Running ${tc.id}: ${tc.title}`);
 
@@ -370,8 +375,10 @@ try {
     testStep: row.testStep,
     expectedResults: row.expectedResults,
     result: row.result,
-    details: row.log
+    details: row.log,
+    code: row.code
   }));
+
 
   const reportPath = path.join(reportDir, 'tc-report.json');
   fs.writeFileSync(
