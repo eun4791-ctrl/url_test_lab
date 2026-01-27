@@ -5,10 +5,13 @@ import path from 'path';
 import 'dotenv/config';
 
 const TARGET_URL = process.argv[2];
+const TC_COUNT = parseInt(process.argv[3]) || 10;
+
 if (!TARGET_URL) {
-  console.error('Usage: node scripts/test-cases.mjs <url>');
+  console.error('Usage: node scripts/test-cases.mjs <url> [count]');
   process.exit(1);
 }
+
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 if (!OPENAI_API_KEY || OPENAI_API_KEY.startsWith('sk-your-api-key')) {
@@ -190,8 +193,10 @@ async function extractPageContext(page) {
 function createPrompt(contextString) {
   return [
     `당신은 어떤 웹사이트든 검증할 수 있는 **범용적이고 방어적인 QA 엔지니어**입니다.`,
-    `제공된 HTML 구조를 기반으로 **가장 안정적인 Smoke Test(기본 기능 점검) 10개**를 작성하세요.`,
+    `제공된 HTML 구조를 기반으로 **가장 안정적인 Smoke Test(기본 기능 점검) 최대 ${TC_COUNT}개**를 작성하세요.`,
+    `페이지가 매우 단순하다면 개수를 줄여도 좋지만, 복잡하다면 ${TC_COUNT}개를 꽉 채워서 작성하세요.`,
     ``,
+
     `[페이지 HTML 구조]`,
     `\`\`\`html`,
     `${contextString.substring(0, 20000)}`,

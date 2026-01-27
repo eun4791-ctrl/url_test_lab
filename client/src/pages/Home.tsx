@@ -228,6 +228,8 @@ export default function Home() {
   const [testCases, setTestCases] = React.useState<TestCase[]>([]);
   const [testSummary, setTestSummary] = React.useState<any>(null);
   const [videoUrl, setVideoUrl] = React.useState<string>("");
+  const [tcCount, setTcCount] = React.useState<number>(10);
+
 
   // Removed GitHub specific constants
 
@@ -262,15 +264,17 @@ export default function Home() {
      Trigger & Status
      ================================================================================== */
 
-  const triggerWorkflow = async (targetUrl: string, tests: string): Promise<number | null> => {
+  const triggerWorkflow = async (targetUrl: string, tests: string, count?: number): Promise<number | null> => {
     try {
-      console.log("Triggering local tests:", targetUrl, tests);
+      console.log("Triggering local tests:", targetUrl, tests, count);
       const result = await triggerMutation.mutateAsync({
         targetUrl,
-        tests
+        tests,
+        tcCount: count
       });
       return result.runId;
     } catch (error) {
+
       console.error("Trigger error:", error);
       throw error;
     }
@@ -495,9 +499,10 @@ export default function Home() {
     setPollCount(0);
 
     try {
-      const id = await triggerWorkflow(normalizedUrl, selectedTests.join(","));
+      const id = await triggerWorkflow(normalizedUrl, selectedTests.join(","), tcCount);
       console.log("[handleRunTests] Received run ID:", id);
       if (id) {
+
         console.log("[handleRunTests] Setting runId to:", id);
         setRunId(id);
       } else {
@@ -615,6 +620,30 @@ export default function Home() {
                 />
                 <p className="text-xs text-gray-500 mt-1">https:// 프로토콜 자동 추가됨</p>
               </div>
+
+              <div>
+                <label className="text-sm font-medium text-gray-700 mb-2 flex justify-between">
+                  <span>🧪 테스트 집중도 (개수)</span>
+                  <span className="text-blue-600 font-bold">{tcCount}개</span>
+                </label>
+                <div className="px-1 py-2">
+                  <input
+                    type="range"
+                    min="1"
+                    max="50"
+                    step="1"
+                    value={tcCount}
+                    onChange={(e) => setTcCount(parseInt(e.target.value))}
+                    disabled={isLoading}
+                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                  />
+                  <div className="flex justify-between text-[10px] text-gray-400 mt-1">
+                    <span>빠름 (1)</span>
+                    <span>정밀 (50)</span>
+                  </div>
+                </div>
+              </div>
+
 
               <div>
                 <label className="text-sm font-medium text-gray-700 mb-3 block">🧪 실행할 테스트 항목</label>

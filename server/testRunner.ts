@@ -29,7 +29,8 @@ let currentState: TestState = {
 
 export const getTestState = () => currentState;
 
-export const startTest = (targetUrl: string, tests: string[]) => {
+export const startTest = (targetUrl: string, tests: string[], tcCount?: number) => {
+
     if (currentState.status === "running") {
         throw new Error("Test is already running");
     }
@@ -48,7 +49,8 @@ export const startTest = (targetUrl: string, tests: string[]) => {
     };
 
     // Run asynchronously
-    runTestsSequence(targetUrl, tests as TestType[]).catch((error) => {
+    runTestsSequence(targetUrl, tests as TestType[], tcCount).catch((error) => {
+
         console.error("[TestRunner] Sequence failed:", error);
         currentState.status = "failed";
         currentState.error = error.message;
@@ -58,7 +60,8 @@ export const startTest = (targetUrl: string, tests: string[]) => {
     return runId;
 };
 
-const runTestsSequence = async (url: string, tests: TestType[]) => {
+const runTestsSequence = async (url: string, tests: TestType[], tcCount?: number) => {
+
     const projectRoot = path.resolve(process.cwd()); // /Users/hg239/ai_web_test
 
     for (const testType of tests) {
@@ -73,8 +76,9 @@ const runTestsSequence = async (url: string, tests: TestType[]) => {
                     break;
 
                 case "tc":
-                    await runScript("node", ["scripts/test-cases.mjs", url], projectRoot);
+                    await runScript("node", ["scripts/test-cases.mjs", url, String(tcCount || 10)], projectRoot);
                     break;
+
 
                 case "performance":
                     // Ensure reports dir exists

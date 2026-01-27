@@ -23,13 +23,15 @@ export const appRouter = router({
       .input(z.object({
         targetUrl: z.string().url(),
         tests: z.string(),
+        tcCount: z.number().int().min(1).max(50).optional(),
       }))
       .mutation(async ({ input }) => {
         const testsList = input.tests.split(",").filter(t => t.trim().length > 0);
 
         try {
           const { startTest } = await import("./testRunner");
-          const runId = startTest(input.targetUrl, testsList);
+          const runId = startTest(input.targetUrl, testsList, input.tcCount);
+
           return { success: true, runId };
         } catch (error: any) {
           console.error("Local trigger error:", error);
