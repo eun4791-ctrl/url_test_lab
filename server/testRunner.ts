@@ -81,9 +81,10 @@ const runTestsSequence = async (url: string, tests: TestType[]) => {
                     fs.mkdirSync(path.join(projectRoot, "reports"), { recursive: true });
                     const lhArgs = [
                         url,
-                        "--output=json",
-                        "--output-path=./reports/lighthouse-report.json",
-                        "--chrome-flags='--no-sandbox'",
+                        "--output", "json",
+                        "--output", "html",
+                        "--output-path", "./reports/performance",
+                        "--chrome-flags='--no-sandbox --headless'",
                         // use local lighthouse binary
                     ];
                     // We assume 'lighthouse' is available via npx or global, using npx is safer for local dev

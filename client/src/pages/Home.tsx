@@ -1,4 +1,5 @@
 import React from "react";
+import * as XLSX from "xlsx";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -509,6 +510,78 @@ export default function Home() {
     }
   };
 
+  // Excel Export
+  const handleExportExcel = () => {
+    if (testCases.length === 0 || !testSummary) return;
+
+    const successRate = testSummary.total > 0
+      ? Math.round((testSummary.passed / (testSummary.total - testSummary.na)) * 100 * 10) / 10
+      : 0;
+
+    const kstString = new Intl.DateTimeFormat('ko-KR', {
+      dateStyle: 'long',
+      timeStyle: 'medium',
+      timeZone: 'Asia/Seoul'
+    }).format(new Date());
+
+    // 1. 전체 데이터 구성 (Array of Arrays)
+    const fullData = [
+      ["테스트 결과 보고서"],
+      [],
+      ["대상 URL", url],
+      ["테스트 일시 (KST)", kstString],
+      [],
+      ["[테스트 요약]"],
+      ["총 테스트 수", testSummary.total],
+      ["통과 (Pass)", testSummary.passed],
+      ["실패 (Fail)", testSummary.failed],
+      ["성공률", `${successRate}%`],
+      [],
+      ["[상세 테스트 결과]"],
+      ["ID", "Title", "Precondition", "Test Step", "Expected Results", "Result", "Details"]
+    ];
+
+    // 2. 테스트 케이스 데이터 추가
+    testCases.forEach(tc => {
+      fullData.push([
+        tc.id,
+        tc.title,
+        tc.precondition,
+        tc.testStep,
+        tc.expectedResults,
+        tc.result,
+        tc.details || ""
+      ]);
+    });
+
+    const worksheet = XLSX.utils.aoa_to_sheet(fullData);
+
+    // 열 너비 조정 (가독성 향상)
+    worksheet["!cols"] = [
+      { wch: 10 }, // ID
+      { wch: 30 }, // Title
+      { wch: 40 }, // Precondition
+      { wch: 50 }, // Test Step
+      { wch: 50 }, // Expected Results
+      { wch: 10 }, // Result
+      { wch: 60 }  // Details
+    ];
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "TestResults");
+
+    // 파일명 생성 (TestReport_YYYYMMDD.xlsx)
+    const kstDate = new Intl.DateTimeFormat('ko-KR', {
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      timeZone: 'Asia/Seoul'
+    }).format(new Date()).replace(/\. /g, '').replace(/\./g, '');
+
+    const fileName = `TestReport_${kstDate}.xlsx`;
+
+    XLSX.writeFile(workbook, fileName);
+    toast.success("엑셀 결과 보고서 다운로드가 시작되었습니다.");
+  };
+
   const isLoading = testState === "RUNNING";
 
   return (
@@ -517,7 +590,7 @@ export default function Home() {
         <div className="mb-8">
           <h1 className="text-4xl font-bold text-gray-900 mb-2">URL Test Lab</h1>
           <p className="text-gray-600">
-            URL 입력만으로 실행하는 웹 QA 테스트 실험실
+            URL 입력만으로 실행하는 웹 테스트 실험실
           </p>
         </div>
 
@@ -550,10 +623,14 @@ export default function Home() {
                     { id: "performance", label: "Lighthouse 성능 확인", desc: "성능, 접근성, SEO 점수 분석" },
                     { id: "responsive", label: "Responsive Viewer 화면 확인", desc: "데스크톱, 태블릿, 모바일 화면 캡처" },
                     //    { id: "ux", label: "AI UX 리뷰", desc: "사용자 경험 및 내게설 분석" },
-                    { id: "tc", label: "시나리오 작성 및 수행", desc: "사용자 시나리오 테스트" },
+                    { id: "tc", label: "테스트케이스 작성 및 수행", desc: "AI 기반 테스트케이스 작성 및 수행" },
                   ].map(({ id, label, desc }) => (
-                    <label key={id} className="flex items-start gap-3 p-2 rounded hover:bg-gray-50 cursor-pointer">
+                    <label
+                      key={id}
+                      className="flex items-start gap-3 p-3 rounded-lg border border-gray-200 bg-white hover:border-blue-300 hover:bg-blue-50/50 transition-all cursor-pointer shadow-sm mb-2"
+                    >
                       <Checkbox
+                        className="mt-1"
                         checked={selectedTests.includes(id as TestType)}
                         onCheckedChange={(checked) => {
                           if (checked) {
@@ -609,24 +686,34 @@ export default function Home() {
                           <span>성능 테스트 실행 중...</span>
                         </div>
                       ) : results.find((r) => r.testId === "performance")?.data ? (
-                        <div className="grid grid-cols-4 gap-4">
-                          <ScoreCircle
-                            score={results.find((r) => r.testId === "performance")?.data?.performance || 0}
-                            label="성능"
-                          />
-                          <ScoreCircle
-                            score={results.find((r) => r.testId === "performance")?.data?.accessibility || 0}
-                            label="접근성"
-                          />
-                          <ScoreCircle
-                            score={results.find((r) => r.testId === "performance")?.data?.["best-practices"] || 0}
-                            label="권장사항"
-                          />
-                          <ScoreCircle
-                            score={results.find((r) => r.testId === "performance")?.data?.seo || 0}
-                            label="검색엔진최적화"
-                          />
-                        </div>
+                        <>
+                          <div className="grid grid-cols-4 gap-4">
+                            <ScoreCircle
+                              score={results.find((r) => r.testId === "performance")?.data?.performance || 0}
+                              label="성능"
+                            />
+                            <ScoreCircle
+                              score={results.find((r) => r.testId === "performance")?.data?.accessibility || 0}
+                              label="접근성"
+                            />
+                            <ScoreCircle
+                              score={results.find((r) => r.testId === "performance")?.data?.["best-practices"] || 0}
+                              label="권장사항"
+                            />
+                            <ScoreCircle
+                              score={results.find((r) => r.testId === "performance")?.data?.seo || 0}
+                              label="검색엔진최적화"
+                            />
+                          </div>
+                          <div className="mt-6 pt-6 border-t flex justify-center">
+                            <Button
+                              variant="outline"
+                              onClick={() => window.open(`/reports/performance.report.html?t=${Date.now()}`, '_blank')}
+                            >
+                              상세 리포트(HTML) 전체 보기
+                            </Button>
+                          </div>
+                        </>
                       ) : (
                         <div className="text-center py-8 text-gray-500">
                           <AlertCircle className="w-8 h-8 mx-auto mb-2 opacity-50" />
@@ -755,9 +842,21 @@ export default function Home() {
                 {results.find((r) => r.testId === "tc") && (
                   <Card>
                     <CardHeader>
-                      <CardTitle className="flex items-center gap-2">
-                        <CheckCircle2 className="w-5 h-5 text-green-600" />
-                        시나리오 작성 및 수행
+                      <CardTitle className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <CheckCircle2 className="w-5 h-5 text-green-600" />
+                          테스트케이스 작성 및 수행
+                        </div>
+                        {testCases.length > 0 && !isLoading && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleExportExcel}
+                            className="text-xs h-8"
+                          >
+                            💾 엑셀 다운로드
+                          </Button>
+                        )}
                       </CardTitle>
                     </CardHeader>
                     <CardContent>

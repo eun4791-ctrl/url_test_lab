@@ -71,7 +71,7 @@ export const appRouter = router({
         const path = await import("path");
         const projectRoot = path.resolve(process.cwd());
 
-        if (fs.existsSync(path.join(projectRoot, "reports/lighthouse-report.json"))) {
+        if (fs.existsSync(path.join(projectRoot, "reports/performance.report.json"))) {
           artifacts.push({ name: "lighthouse-report" });
         }
         if (fs.existsSync(path.join(projectRoot, "screenshots"))) {
@@ -144,7 +144,7 @@ export const appRouter = router({
         const projectRoot = path.resolve(process.cwd());
 
         if (input.artifactName === "lighthouse-report") {
-          const p = path.join(projectRoot, "reports/lighthouse-report.json");
+          const p = path.join(projectRoot, "reports/performance.report.json");
           if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, "utf-8"));
         }
         if (input.artifactName === "tc-report") {
