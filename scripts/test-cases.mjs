@@ -206,8 +206,10 @@ function createPrompt(contextString) {
     `5. **방어적 코드**: if (await locator.isVisible()) ...`,
 
     ``,
-    `[출력 형식]`,
-    `JSON 배열만 반환하세요.`,
+    `[출력 형식 및 언어 설정]`,
+    `1. **title, precondition, testStep, expectedResults**: 반드시 **한국어**로 작성하세요.`,
+    `2. **tc.log (code 내부)**: 반드시 **영어(English)**로 작성하세요.`,
+    `3. JSON 배열만 반환하세요.`,
     `[`,
     `  {`,
     `    "id": "TC-001",`,
@@ -217,9 +219,8 @@ function createPrompt(contextString) {
     `    "expectedResults": "로고가 화면에 표시됨",`,
     `    "code": "const logo = page.locator('header a, .logo').first();\\nif (await logo.isVisible()) {\\n  await highlight(logo);\\n  tc.result='Pass';\\n} else {\\n  tc.result='Fail'; tc.log='Logo element not found in header';\\n}"`,
     `  }`,
-    `]`,
-    ``,
-    `⚠️ IMPORTANT: When setting tc.result='Fail', you MUST provide a specific reason in English for tc.log.`
+    `]`
+
 
 
   ].join('\n');
