@@ -242,6 +242,8 @@ function createPrompt(contextString, count, startId = 1, existingTitles = []) {
     ``,
     `[금지 사항 (위반 시 0점)]`,
     `- **절대 사용 금지**: ':contains()', ':has-text()', 'xpath', 'check for <title>'`,
+    `- **가상 속성 사용 금지**: 'video[playing]', 'div[selected]' 등 실제 HTML에 없는 속성으로 상태를 추측하지 마세요. 비디오 재생 여부는 단순히 video 요소의 존재만 확인하세요.`,
+    `- **비인터랙티브 요소 클릭 금지**: <div>, <span>, <h1~6> 등을 클릭하여 페이지가 이동할 것이라 가정하지 마세요. 반드시 <a>, <button> 태그만 클릭하세요.`,
     `- **보이지 않는 요소**: <title>, <meta>, <script> 태그 사용 금지.`,
     ``,
     `[페이지 구조 (핵심만 요약됨)]`,
@@ -496,6 +498,15 @@ async function runPlaybookAction(page, context, step) {
         console.log(`   [Check URL] Current: "${currentUrl}" vs Expected: "${value}"`);
 
         let found = currentUrl.includes(value);
+
+        // Leading slash mismatch handling (e.g. expected "/#features" but got "#features" or vice versa in some contexts, though usually full URL is present)
+        if (!found && value.startsWith('/')) {
+          // try without leading slash
+          found = currentUrl.includes(value.substring(1));
+        } else if (!found && !value.startsWith('/') && !value.startsWith('http')) {
+          // try with leading slash
+          found = currentUrl.includes('/' + value);
+        }
 
         // 새 탭(Target="_blank") 대응: 현재 페이지가 아니면 다른 탭들도 뒤져본다.
         if (!found) {
