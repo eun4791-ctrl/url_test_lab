@@ -8,7 +8,8 @@ if (!url) {
 }
 
 console.log(`📸 Starting screenshots for: ${url}`);
-const out = 'screenshots';
+// Update output path to client/public/screenshots so they can be served statically
+const out = 'client/public/screenshots';
 fs.mkdirSync(out, { recursive: true });
 
 try {
@@ -19,23 +20,23 @@ try {
   */
 
   const devices = [
-    { 
-      name: 'desktop', 
-      width: 1920, 
+    {
+      name: 'desktop',
+      width: 1920,
       height: 1080,
       userAgent: undefined, // default
-      isMobile: false 
+      isMobile: false
     },
-    { 
-      name: 'tablet', 
-      width: 768, 
+    {
+      name: 'tablet',
+      width: 768,
       height: 1024,
       userAgent: 'Mozilla/5.0 (iPad; CPU OS 13_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0 Mobile/15E148 Safari/604.1',
       isMobile: true
     },
-    { 
-      name: 'mobile', 
-      width: 375, 
+    {
+      name: 'mobile',
+      width: 375,
       height: 667,
       userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1',
       isMobile: true
@@ -54,7 +55,7 @@ try {
     });
 
     const page = await context.newPage();
-    
+
     // 페이지 로드
     await page.goto(url, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(3000); // 렌더링 안정화 대기
@@ -62,7 +63,7 @@ try {
     const outputPath = `${out}/${device.name}.png`;
     await page.screenshot({ path: outputPath, timeout: 60000 });
     console.log(`✅ Saved ${device.name} screenshot to ${outputPath}`);
-    
+
     await context.close();
   }
 

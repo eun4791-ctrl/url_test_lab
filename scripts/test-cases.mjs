@@ -26,7 +26,11 @@ const reportDir = 'reports';
 
 // Ensure directories exist
 if (fs.existsSync(videoDir)) {
-  fs.rmSync(videoDir, { recursive: true, force: true });
+  try {
+    fs.rmSync(videoDir, { recursive: true, force: true });
+  } catch (e) {
+    console.warn(`⚠️ Could not clean video dir (locked?): ${e.message}`);
+  }
 }
 fs.mkdirSync(videoDir, { recursive: true });
 fs.mkdirSync(reportDir, { recursive: true });
@@ -50,6 +54,7 @@ let pass = 0;
 let fail = 0;
 let na = 0;
 let totalUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+let fatalError = null;
 
 const record = (tc) => {
   rows.push(tc);
@@ -152,10 +157,12 @@ async function extractPageContext(page) {
       // No, let's try strict visibility check for all elements can be slow on huge pages.
       // Let's check `hidden` attribute and rudimentary checks.
 
+      // Visibility Check: Use checkVisibility if available (modern browsers)
+      if (node.checkVisibility && !node.checkVisibility()) return '';
       if (node.hasAttribute('hidden') || node.getAttribute('aria-hidden') === 'true') return '';
 
       // Attribute Compression
-      const allowList = ['id', 'class', 'name', 'type', 'placeholder', 'aria-label', 'role', 'href', 'title', 'data-testid', 'data-cy'];
+      const allowList = ['id', 'class', 'name', 'type', 'placeholder', 'aria-label', 'role', 'href', 'title', 'data-testid', 'data-cy', 'alt'];
       let attrs = '';
       let hasImportantAttr = false;
 
@@ -199,59 +206,163 @@ function createPrompt(contextString, count, startId = 1, existingTitles = []) {
     : '';
 
   return [
-    `당신은 어떤 웹사이트든 검증할 수 있는 **범용적이고 방어적인 QA 엔지니어**입니다.`,
-    `제공된 HTML 구조를 기반으로 **가장 안정적인 Smoke Test ${count}개**를 작성하세요.`,
+    `당신은 바이브코딩으로 생성된 웹페이지를 검증하는 **시니어 QA 엔지니어**입니다.`,
+    `아래에 제공된 웹페이지 정보(HTML 구조)를 기준으로 **실행 가능한 Smoke Test ${count}개**를 작성하세요.`,
     `ID는 TC-${startIdStr}부터 순차적으로 부여하세요.`,
-    excludePart,
+    `${excludePart}`,
     ``,
-    `[핵심 원칙]`,
-    `1. **안정적인 셀렉터**: id, data-testid, aria-label 우선 사용.`,
-    `2. **새 탭 대응**: target="_blank" 링크는 'clickNewTab' 액션을 사용하세요.`,
-    `3. **검증 중심**: 단순 클릭만 하지 말고, 클릭 후 결과(URL 변경, 요소 노출 등)를 반드시 확인하세요.`,
+    `[목표]`,
+    `- 빠른 검증을 위한 **Smoke Test 중심**`,
+    `- "동작 확인 + 결과 검증"이 있는 TC만 생성`,
+    `- 단순 UI 존재 여부만 확인하는 테스트는 최소화`,
     ``,
-    `[페이지 구조]`,
+    `[중복 및 유사 TC 방지 규칙 — 매우 중요]`,
+    `다음 항목 중 하나라도 동일하면 **중복 테스트로 간주하고 작성하지 마세요**:`,
+    `1. 동일한 사용자 목적 (예: 홈 이동 확인, 검색 가능 여부 등)`,
+    `2. 동일한 핵심 Action + 동일한 대상 요소`,
+    `3. 단순 표현만 바뀐 테스트`,
+    `4. 동일한 사용자 흐름을 쪼갠 테스트 (예: 클릭과 검증을 하나로 합칠 것)`,
+    ``,
+    `[테스트 설계 원칙]`,
+    `- **Click 필수 검증**: click 테스트에는 반드시 결과 검증(check 또는 checkUrl)이 포함되어야 합니다.`,
+    `- **End-to-End**: 부분적인 기능보다는 전체 흐름(진입 -> 동작 -> 결과)을 확인하세요.`,
+    `- **전체 커버리지 (Global Scope)**: 반드시 **Header(상단), Body(중단), Footer(하단)** 영역을 골고루 포함하세요. 한 곳에 뭉치지 마세요.`,
+    `- **명확성**: 불확실하거나 추측성 ID(예: #notice_page)는 절대 사용하지 마세요.`,
+    `- **안정적인 셀렉터**: id, data-testid, aria-label 우선 사용.`,
+    ``,
+    `[우선 검증 영역]`,
+    `- 페이지 최초 진입 및 렌더링`,
+    `- 주요 사용자 액션(버튼, 링크, 입력)`,
+    `- 화면 전환 / 상태 변화`,
+    ``,
+    `[테스트 환경 (기술적 제약)]`,
+    `- **상태**: 비로그인(Guest) 접속`,
+    `- **리다이렉트**: 'MY', '구독', '메일' 등 개인화 메뉴는 **로그인 페이지** 로 이동하는 것이 정상(Pass).`,
+    `- **이동 검증**: 페이지 이동 시 알 수 없는 ID 추측 금지. 반드시 'checkUrl'로 URL을 검증.`,
+    ``,
+    `[금지 사항 (위반 시 0점)]`,
+    `- **절대 사용 금지**: ':contains()', ':has-text()', 'xpath', 'check for <title>'`,
+    `- **보이지 않는 요소**: <title>, <meta>, <script> 태그 사용 금지.`,
+    ``,
+    `[페이지 구조 (핵심만 요약됨)]`,
     `\`\`\`html`,
     `${contextString}`,
     `\`\`\``,
     ``,
     `[출력 형식]`,
-    `반드시 다음 구조의 JSON 배열만 반환하세요. 'steps'의 'action'은 [click, type, check, wait, clickNewTab] 중 하나여야 합니다.`,
+    `반드시 다음 구조의 JSON 배열만 반환하세요. Steps의 action은 [click, type, check, wait, clickNewTab, checkUrl] 중 하나.`,
     `[`,
     `  {`,
     `    "id": "TC-${startIdStr}",`,
-    `    "title": "로고 표시 및 홈 이동 확인 (한국어 작성)",`,
+    `    "title": "로고 표시 및 홈 이동 확인",`,
     `    "precondition": "URL 접속",`,
-    `    "testStep": "설명 (한국어)",`,
-    `    "expectedResults": "설명 (한국어)",`,
+    `    "testStep": "헤더의 로고를 클릭하여 메인으로 이동하는지 확인",`,
+    `    "expectedResults": "홈 페이지 URL로 이동하고 메인 배너가 표시됨",`,
     `    "steps": [`,
-    `      { "action": "check", "selector": "header img.logo", "desc": "Check logo visible" },`,
-    `      { "action": "click", "selector": "nav a.home", "desc": "Click home link" },`,
-    `      { "action": "wait", "value": 1000 },`,
-    `      { "action": "check", "selector": "h1.hero-title", "desc": "Verify arrival" }`,
+    `      { "action": "check", "selector": "/* 실제 페이지의 로고 ID 또는 클래스 */", "desc": "로고 노출 확인" },`,
+    `      { "action": "click", "selector": "/* 실제 로고 링크 선택자 */", "desc": "로고 클릭" },`,
+    `      { "action": "wait", "value": 1500 },`,
+    `      { "action": "checkUrl", "value": "/main", "desc": "URL 포함 여부 확인" }`,
     `    ]`,
     `  }`,
     `]`
   ].join('\n');
 }
 
+function normalizeAndFilterTCs(aiTCs, existingTitles, signatureSet) {
+  const validTCs = [];
+
+  // 간단한 유사도 검사 함수 (Jaccard Index 유사)
+  const isSimilar = (t1, t2) => {
+    if (!t1 || !t2) return false;
+    const s1 = new Set(t1.replace(/\s+/g, '').split(''));
+    const s2 = new Set(t2.replace(/\s+/g, '').split(''));
+    const intersection = new Set([...s1].filter(x => s2.has(x)));
+    const union = new Set([...s1, ...s2]);
+    return (intersection.size / union.size) > 0.6; // 60% 이상 겹치면 중복으로 간주
+  };
+
+  for (const tc of aiTCs) {
+    if (!tc.steps || !Array.isArray(tc.steps)) continue;
+
+    // 0. Signature Check (Step Action + Selector 조합)
+    // "check:#logo|click:#logo|wait:1500|checkUrl:naver.com" 형태
+    const signature = tc.steps
+      .map(s => `${s.action}:${s.selector || ''}`)
+      .join('|');
+
+    if (signatureSet.has(signature)) {
+      console.log(`🗑️ Skip Duplicate Signature: "${tc.title}"`);
+      continue;
+    }
+
+    // 1. 제목 중복 체크 (기존 것들과 비교)
+    if (existingTitles.some(existTitle => isSimilar(existTitle, tc.title))) {
+      console.log(`🗑️ Skip Duplicate Title: "${tc.title}" (Similar to existing)`);
+      continue;
+    }
+
+    // 2. ❌ 의미 없는 TC 제거
+    const actions = tc.steps.map(s => s.action);
+    if (actions.length === 1 && actions[0] === 'check') continue;
+
+    // 3. ❌ click 후 검증 없는 TC 제거
+    const hasClick = actions.includes('click') || actions.includes('clickNewTab');
+    const hasValidation = actions.includes('check');
+    if (hasClick && !hasValidation) continue;
+
+    // 4. ❌ selector 없는 step 제거 (checkUrl은 selector 필요 없음)
+    if (tc.steps.some(s => ['click', 'type', 'check', 'clickNewTab'].includes(s.action) && !s.selector)) continue;
+
+    // 5. ❌ 금지된 셀렉터 포함 제거
+    const badSelectors = [':contains', ':has-text'];
+    const hasBadSelector = tc.steps.some(s => s.selector && badSelectors.some(bad => s.selector.includes(bad)));
+    if (hasBadSelector) {
+      console.log(`🗑️ Skip Bad Selector: "${tc.title}"`);
+      continue;
+    }
+
+    // 통과
+    validTCs.push(tc);
+    existingTitles.push(tc.title); // 현재 배치 내에서도 중복 방지
+    signatureSet.add(signature);   // 시그니처 등록
+  }
+
+  return validTCs;
+}
+
+function cleanSteps(steps) {
+  return steps.filter((step, idx) => {
+    if (step.action === 'wait') {
+      return idx > 0; // 첫 step wait 제거
+    }
+    return true;
+  });
+}
+
 
 
 async function generateTestCases(contextString) {
-  const batchSize = 15;
+  const batchSize = 30; // Increased to reduce duplication windows
   let allTestCases = [];
   let allTitles = [];
+  const signatureSet = new Set();
 
-  const totalBatches = Math.ceil(TC_COUNT / batchSize);
-  console.log(`🤖 Batching with gpt-4o-mini: ${TC_COUNT} TCs in ${totalBatches} batches...`);
+  // Context Caching
+  const cachedContext = contextString.substring(0, 100000);
 
-  // Context Caching: Use first 15000 chars to avoid token bloat
-  const cachedContext = contextString.substring(0, 15000);
+  let retries = 0;
+  const maxRetries = 10;
 
-  for (let i = 0; i < totalBatches; i++) {
-    const currentBatchCount = Math.min(batchSize, TC_COUNT - (i * batchSize));
-    const startId = (i * batchSize) + 1;
+  console.log(`🤖 Generating ${TC_COUNT} TCs (Refill Loop Strategy)...`);
 
-    console.log(`📦 Batch ${i + 1}/${totalBatches}: Generating ${currentBatchCount} TCs...`);
+  while (allTestCases.length < TC_COUNT && retries < maxRetries) {
+    const needed = TC_COUNT - allTestCases.length;
+    console.log(`🔄 [Loop ${retries + 1}/${maxRetries}] Need ${needed} TCs (Current: ${allTestCases.length})`);
+
+    const currentBatchCount = Math.min(batchSize, needed);
+    // Start ID continues
+    const startId = allTestCases.length + 1;
 
     const prompt = createPrompt(cachedContext, currentBatchCount, startId, allTitles);
 
@@ -265,45 +376,56 @@ async function generateTestCases(contextString) {
         body: JSON.stringify({
           model: 'gpt-4o-mini',
           messages: [{ role: 'user', content: prompt }],
-          temperature: 0.3,
+          temperature: 0.4 + (retries * 0.1), // Increase temp on retries
           max_tokens: 4096
         })
       });
 
       if (!response.ok) {
-        const errText = await response.text();
-        console.error(`❌ Batch ${i + 1} Failed: ${response.status}`);
+        console.error(`❌ API Failed: ${response.status}`);
+        retries++;
         continue;
       }
 
       const data = await response.json();
-
-      // Usage Tracking
       if (data.usage) {
-        totalUsage.prompt_tokens += data.usage.prompt_tokens;
-        totalUsage.completion_tokens += data.usage.completion_tokens;
-        totalUsage.total_tokens += data.usage.total_tokens;
+        Object.keys(totalUsage).forEach(k => totalUsage[k] += (data.usage[k] || 0));
       }
 
       let content = data.choices[0].message.content;
       content = content.replace(/```json/g, '').replace(/```/g, '').trim();
 
-      try {
-        const parsed = JSON.parse(content);
-        if (Array.isArray(parsed)) {
-          allTestCases = allTestCases.concat(parsed);
-          allTitles = allTitles.concat(parsed.map(t => t.title));
-          console.log(`✅ Batch ${i + 1} merged. Accumulated: ${allTestCases.length} TCs`);
+      const parsed = JSON.parse(content);
+      if (Array.isArray(parsed)) {
+        // Filter using accumulated signatureSet
+        const filtered = normalizeAndFilterTCs(parsed, allTitles, signatureSet);
+
+        if (filtered.length > 0) {
+          // Re-assign IDs to be sequential
+          filtered.forEach((tc, idx) => {
+            tc.id = `TC-${String(allTestCases.length + idx + 1).padStart(3, '0')}`;
+          });
+
+          allTestCases = [...allTestCases, ...filtered];
+          allTitles = [...allTitles, ...filtered.map(t => t.title)];
+          console.log(`✅ Accepted ${filtered.length} TCs (Rejected ${parsed.length - filtered.length})`);
+        } else {
+          console.warn(`⚠️ All ${parsed.length} TCs were rejected by filter.`);
         }
-      } catch (parseErr) {
-        console.error(`❌ Batch ${i + 1} JSON Error:`, parseErr.message);
       }
-    } catch (err) {
-      console.error(`❌ Batch ${i + 1} System Error:`, err.message);
+    } catch (e) {
+      console.error(`❌ Loop Error:`, e.message);
     }
+
+    retries++;
   }
 
-  console.log(`\n📊 Usage Stats: Prompt=${totalUsage.prompt_tokens}, Completion=${totalUsage.completion_tokens}, Total=${totalUsage.total_tokens}`);
+  console.log(`\n📊 Final Count: ${allTestCases.length}/${TC_COUNT}`);
+
+  if (allTestCases.length < TC_COUNT) {
+    console.warn(`⚠️ Failed to meet target count. Missing ${TC_COUNT - allTestCases.length} TCs.`);
+  }
+
   return allTestCases;
 }
 
@@ -323,7 +445,19 @@ async function runPlaybookAction(page, context, step) {
   try {
     switch (action) {
       case 'check':
-        if (!locator) throw new Error('Selector is required for check');
+        if (!selector) throw new Error('Selector is required for check');
+
+        // Special handling for <title>
+        if (selector === 'title' || selector === 'head title') {
+          const pageTitle = await page.title();
+          console.log(`   [Check Title] Current: "${pageTitle}"`);
+          // Just pass if we got a title, or maybe check non-empty? 
+          // Since AI doesn't give expected value in step params usually, we just ensure it exists.
+          if (!pageTitle) throw new Error('Page title is empty');
+          break;
+        }
+
+        if (!locator) throw new Error('Locator creation failed');
         await highlight(locator);
         await expect(locator).toBeVisible({ timeout: 5000 });
         break;
@@ -331,7 +465,8 @@ async function runPlaybookAction(page, context, step) {
       case 'click':
         if (!locator) throw new Error('Selector is required for click');
         await highlight(locator);
-        await locator.click({ timeout: 5000 });
+        // Force click explicitly to avoid interceptions
+        await locator.click({ timeout: 5000, force: true });
         break;
 
       case 'type':
@@ -349,10 +484,34 @@ async function runPlaybookAction(page, context, step) {
         await highlight(locator);
         const [newPage] = await Promise.all([
           context.waitForEvent('page', { timeout: 10000 }),
-          locator.click()
+          // Force click here too
+          locator.click({ force: true })
         ]);
         await newPage.waitForLoadState();
         await newPage.close();
+        break;
+
+      case 'checkUrl':
+        const currentUrl = page.url();
+        console.log(`   [Check URL] Current: "${currentUrl}" vs Expected: "${value}"`);
+
+        let found = currentUrl.includes(value);
+
+        // 새 탭(Target="_blank") 대응: 현재 페이지가 아니면 다른 탭들도 뒤져본다.
+        if (!found) {
+          const allPages = context.pages();
+          for (const p of allPages) {
+            if (p.url().includes(value)) {
+              found = true;
+              console.log(`   [Check URL] Found matching URL in another tab: "${p.url()}"`);
+              break;
+            }
+          }
+        }
+
+        if (!found) {
+          throw new Error(`URL mismatch: expected to include "${value}", but got "${currentUrl}" (and checked ${context.pages().length} total tabs)`);
+        }
         break;
 
       default:
@@ -412,28 +571,41 @@ try {
     try {
       // 🔄 Isolation
       try {
-        if (page.url() !== TARGET_URL) {
-          await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded', timeout: 10000 });
-        } else {
-          await page.reload({ waitUntil: 'domcontentloaded', timeout: 10000 });
-        }
+        await page.context().clearCookies();
+        await page.evaluate(() => {
+          localStorage.clear();
+          sessionStorage.clear();
+        });
+        await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded', timeout: 10000 });
       } catch (e) { /* ignore reload warns */ }
 
       await page.waitForTimeout(1000);
       await showTCOverlay(page, tc);
 
       if (t.steps && Array.isArray(t.steps)) {
-        for (const step of t.steps) {
+        // Step cleaning
+        const cleanedSteps = cleanSteps(t.steps);
+
+        // Validation check
+        const hasAssertion = cleanedSteps.some(s => s.action === 'check');
+
+        for (const step of cleanedSteps) {
           await runPlaybookAction(page, context, step);
         }
-        tc.result = 'Pass';
+
+        if (!hasAssertion) {
+          tc.result = 'Fail';
+          tc.log = 'No validation(check) step';
+        } else {
+          tc.result = 'Pass';
+        }
       } else {
-        tc.result = 'Fail-AI';
+        tc.result = 'Fail';
         tc.log = 'No steps provided in AI design';
       }
 
     } catch (e) {
-      tc.result = e.failType || 'Fail-General';
+      tc.result = 'Fail';
       tc.log = e.message;
       console.error(`❌ ${tc.result} in ${tc.id}: ${e.message}`);
     }
@@ -443,7 +615,15 @@ try {
   }
 
 } catch (e) {
+  fatalError = e.message; // Capture generic fatal error
   console.error('Fatal error details:', e);
+
+  // Customize message for common network errors
+  if (e.message.includes('ERR_NAME_NOT_RESOLVED')) {
+    fatalError = 'URL을 찾을 수 없습니다. 주소를 확인해주세요. (ERR_NAME_NOT_RESOLVED)';
+  } else if (e.message.includes('ERR_CONNECTION_REFUSED')) {
+    fatalError = '서버 연결이 거부되었습니다. (ERR_CONNECTION_REFUSED)';
+  }
 }
 
 
@@ -467,6 +647,7 @@ try {
     JSON.stringify({
       url: TARGET_URL,
       timestamp: new Date().toISOString(),
+      error: fatalError, // Write to report
       usage: totalUsage,
       testCases,
       summary: {
@@ -475,10 +656,10 @@ try {
         failed: fail,
         blocked: 0,
         na,
-        successRate: rows.length > 0 ? Math.round((pass / rows.length) * 100) : 0
+        successRate: rows.length > 0 ? Math.round((pass / rows.length) * 100) : 0,
+        warning: (rows.length < TC_COUNT) ? `⚠️ 목표 개수(${TC_COUNT}개)를 채우지 못했습니다. (생성된 TC: ${rows.length}개)` : null
       }
     }, null, 2)
-
   );
 
   console.log(`📝 Report saved to ${reportPath}`);

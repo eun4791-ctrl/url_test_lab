@@ -17,6 +17,7 @@ interface LighthouseScore {
   accessibility: number;
   "best-practices": number;
   seo: number;
+  error?: string;
 }
 
 interface ResponsiveScreenshots {
@@ -160,6 +161,8 @@ const TestCaseTable = ({ testCases, summary }: { testCases: TestCase[]; summary:
         </div>
       </div>
 
+
+
       {/* 상세 테이블 */}
       <div className="overflow-x-auto">
         <table className="w-full text-sm border-collapse">
@@ -237,8 +240,33 @@ export default function Home() {
   // URL 검증
   const validateUrl = (inputUrl: string): boolean => {
     try {
+      // 1. 기본 URL 구조 확인
       const urlObj = new URL(inputUrl);
-      return urlObj.protocol === "http:" || urlObj.protocol === "https:";
+      if (urlObj.protocol !== "http:" && urlObj.protocol !== "https:") return false;
+
+      // 2. 호스트명(도메인)에 점(.)이 하나라도 있는지 확인 (예: localhost 제외)
+      // "www.ddddss" -> "https://www.ddddss" (hostname: www.ddddss) -> OK
+      // "ddddss" -> "https://ddddss" (hostname: ddddss) -> Fail (if stricter)
+
+      // 더 엄격한 도메인 패턴: 최소한 "xxx.xx" 형태여야 함
+      const hostname = urlObj.hostname;
+      // "localhost"는 허용하되, 그 외에는 반드시 점(.)이 포함되어야 함
+      if (hostname !== "localhost" && !hostname.includes(".")) {
+        return false;
+      }
+
+      // "www.ddddss" 처럼 TLD가 없는 경우를 걸러내려면 TLD 리스트나 정규식 필요하지만,
+      // 최소한 "문자.문자" 형태인지 확인. 
+      // (www.ddddss 는 사실 .com이 빠진 형태라 애매하지만 유효한 호스트명일 수도 있음. 
+      //  하지만 일반적인 웹 테스트에서는 TLD가 있는 것을 기대함)
+
+      // 아주 간단한 TLD 체크 (마지막 점 뒤에 2글자 이상)
+      const tldPattern = /\.[a-z]{2,}$/i;
+      if (hostname !== "localhost" && !tldPattern.test(hostname)) {
+        return false;
+      }
+
+      return true;
     } catch {
       return false;
     }
@@ -246,10 +274,11 @@ export default function Home() {
 
   // URL 자동 보정
   const normalizeUrl = (inputUrl: string): string => {
-    if (!inputUrl.startsWith("http://") && !inputUrl.startsWith("https://")) {
-      return `https://${inputUrl}`;
+    let normalized = inputUrl.trim();
+    if (!normalized.startsWith("http://") && !normalized.startsWith("https://")) {
+      normalized = `https://${normalized}`;
     }
-    return inputUrl;
+    return normalized;
   };
 
   // tRPC utils
@@ -321,7 +350,10 @@ export default function Home() {
         lighthouseScores.accessibility = Math.round((categories.accessibility?.score || 0) * 100);
         lighthouseScores["best-practices"] = Math.round((categories["best-practices"]?.score || 0) * 100);
         lighthouseScores.seo = Math.round((categories.seo?.score || 0) * 100);
+      } else if (result.runtimeError) {
+        lighthouseScores.error = result.runtimeError.message;
       }
+
       return lighthouseScores;
     } catch (error) {
       console.error("LH fetch error:", error);
@@ -330,16 +362,9 @@ export default function Home() {
   };
 
   // Screenshots
-  const fetchScreenshots = async (id: number): Promise<ResponsiveScreenshots> => {
-    try {
-      // We implemented a specific helper for screenshots
-      const screenshots = await utils.client.qa.getScreenshots.query();
-      setScreenshotBase64(screenshots); // save base64 for download if needed? logic seems mixed in original
-      return screenshots as ResponsiveScreenshots;
-    } catch (error) {
-      console.error("Screenshot fetch error:", error);
-      return {};
-    }
+  // Using static files served from public/screenshots
+  const getScreenshotUrl = (device: string) => {
+    return `/screenshots/${device}.png?t=${Date.now()}`;
   };
 
   // UX Review
@@ -374,16 +399,16 @@ export default function Home() {
   };
 
   // Test Cases
-  const fetchTestCases = async (id: number): Promise<{ testCases: TestCase[]; summary: any }> => {
+  const fetchTestCases = async (id: number): Promise<{ testCases: TestCase[]; summary: any; error?: string }> => {
     try {
       const result = await utils.client.qa.getArtifactContent.query({ artifactName: "tc-report" });
       if (!result) return { testCases: [], summary: null };
 
-      const testCasesList = result.testCases || [];
-      const summary = result.summary || {};
-      setTestCases(testCasesList);
-      setTestSummary(summary);
-      return { testCases: testCasesList, summary };
+      return {
+        testCases: result.testCases || [],
+        summary: result.summary || {},
+        error: result.error
+      };
     } catch (error) {
       console.error("TC fetch error:", error);
       return { testCases: [], summary: null };
@@ -407,8 +432,8 @@ export default function Home() {
         console.log(`[Polling] Status: ${status}, Conclusion: ${conclusion}`);
         setPollCount(pollCount);
 
-        if (status === "completed") {
-          console.log("[Polling] Run completed! Fetching results...");
+        if (status === "completed" || status === "failed") {
+          console.log(`[Polling] Run finished with status: ${status}. Fetching results...`);
           isPolling = false;
 
           // 결과 수집
@@ -424,11 +449,22 @@ export default function Home() {
           }
 
           if (selectedTests.includes("responsive")) {
-            const screenshots = await fetchScreenshots(runId);
+            // Assume success if file exists (UI will handle 404 via onError, or just show)
+            // We don't need to fetch content anymore.
             newResults.push({
               testId: "responsive",
               status: "completed",
-              data: screenshots,
+              data: {
+                desktop: getScreenshotUrl('desktop'),
+                tablet: getScreenshotUrl('tablet'),
+                mobile: getScreenshotUrl('mobile'),
+              },
+            });
+            // Update state for UI compatibility
+            setScreenshotBase64({
+              desktop: getScreenshotUrl('desktop'),
+              tablet: getScreenshotUrl('tablet'),
+              mobile: getScreenshotUrl('mobile'),
             });
           }
 
@@ -443,12 +479,29 @@ export default function Home() {
 
           if (selectedTests.includes("tc")) {
             const tcData = await fetchTestCases(runId);
-            newResults.push({
-              testId: "tc",
-              status: "completed",
-              data: tcData,
-            });
-            await fetchVideo(runId);
+
+            // 전역 에러가 있으면 상태를 failed로 처리
+            if (tcData.error) {
+              newResults.push({
+                testId: "tc",
+                status: "failed",
+                data: tcData,
+                error: tcData.error
+              });
+              toast.error("테스트 중 오류가 발생했습니다.", {
+                description: tcData.error,
+                duration: 5000
+              });
+            } else {
+              setTestCases(tcData.testCases);
+              setTestSummary(tcData.summary);
+              newResults.push({
+                testId: "tc",
+                status: "completed",
+                data: tcData,
+              });
+              await fetchVideo(runId);
+            }
           }
 
           console.log("[Results] Setting", newResults.length, "results");
@@ -599,14 +652,14 @@ export default function Home() {
           </p>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           <Card className="lg:col-span-1">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Zap className="w-5 h-5" />
                 테스트 설정
               </CardTitle>
-              <CardDescription>테스트할 URL을 입력하고 항목을 선택하세요.</CardDescription>
+              <CardDescription>테스트할 URL을 입력하고 테스트 항목을 선택하세요.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div>
@@ -697,7 +750,7 @@ export default function Home() {
             </CardContent>
           </Card>
 
-          <div className="lg:col-span-2 space-y-4">
+          <div className="lg:col-span-3 space-y-4">
             {results.length > 0 && (
               <>
                 {results.find((r) => r.testId === "performance") && (
@@ -734,6 +787,15 @@ export default function Home() {
                               label="검색엔진최적화"
                             />
                           </div>
+                          {results.find((r) => r.testId === "performance")?.data?.error && (
+                            <div className="mt-4 p-4 bg-red-50 text-red-800 rounded-lg flex items-start gap-2">
+                              <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                              <div>
+                                <h4 className="font-semibold">Lighthouse 오류 발생</h4>
+                                <p className="text-sm mt-1">{results.find((r) => r.testId === "performance")?.data?.error}</p>
+                              </div>
+                            </div>
+                          )}
                           <div className="mt-6 pt-6 border-t flex justify-center">
                             <Button
                               variant="outline"
@@ -894,8 +956,21 @@ export default function Home() {
                           <Clock className="w-5 h-5 animate-spin text-blue-600 mr-2" />
                           <span>테스트 케이스 실행 중...</span>
                         </div>
+                      ) : results.find((r) => r.testId === "tc")?.error ? (
+                        /* 에러 표시용 UI 추가 */
+                        <div className="p-4 bg-red-100 border border-red-400 text-red-700 rounded-lg flex items-center gap-2">
+                          <AlertCircle className="w-5 h-5 flex-shrink-0" />
+                          <span className="font-semibold">테스트 실패:</span>
+                          <span>{results.find((r) => r.testId === "tc")?.error}</span>
+                        </div>
                       ) : testCases.length > 0 && testSummary ? (
                         <div className="space-y-6">
+                          {testSummary.warning && (
+                            <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-sm flex items-center gap-2">
+                              <AlertCircle className="w-5 h-5 flex-shrink-0" />
+                              {testSummary.warning}
+                            </div>
+                          )}
                           {videoUrl && (
                             <div className="border rounded-lg p-4 bg-gray-50">
                               <h3 className="text-sm font-semibold text-gray-900 mb-3">Video Recording</h3>
